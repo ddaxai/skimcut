@@ -58,7 +58,14 @@ if need sample.mkv; then
     -c:v libx264 -preset veryfast -pix_fmt yuv420p -g 50 -c:a aac -b:a 128k -shortest "$OUT/sample.mkv"
 fi
 
-# 6. 字幕：GBK 编码的 SRT，以及一个带样式的 ASS。
+# 6. AVPlayer 打不开、也不能直接转封装的 AVI（MPEG-4 Part 2 + MP2），用来测试预览代理。
+if need sample_mpeg4.avi; then
+  "${FF[@]}" -f lavfi -i "testsrc2=size=640x360:rate=25:duration=6" \
+    -f lavfi -i "sine=frequency=550:sample_rate=48000:duration=6" \
+    -c:v mpeg4 -q:v 5 -pix_fmt yuv420p -c:a mp2 -b:a 128k -shortest "$OUT/sample_mpeg4.avi"
+fi
+
+# 7. 字幕：GBK 编码的 SRT，以及一个带样式的 ASS。
 if need subs_gbk.srt; then
   tmp="$(mktemp)"
   cat > "$tmp" <<'SRT'
