@@ -21,11 +21,12 @@ if need h264_gop4.mp4; then
     -c:a aac -b:a 128k -shortest -movflags +faststart "$OUT/h264_gop4.mp4"
 fi
 
-# 2. 10-bit HEVC（Main 10）+ AAC，6 秒，带 BT.709 色彩参数。
+# 2. 10-bit HEVC（Main 10）+ AAC，6 秒，带 BT.709 色彩参数（容器和 HEVC 码流的 VUI 里都写）。
 if need hevc_10bit.mp4; then
   "${FF[@]}" -f lavfi -i "testsrc2=size=1280x720:rate=30:duration=6" \
     -f lavfi -i "sine=frequency=660:sample_rate=48000:duration=6" \
-    -c:v libx265 -preset ultrafast -pix_fmt yuv420p10le -x265-params log-level=error \
+    -c:v libx265 -preset ultrafast -pix_fmt yuv420p10le \
+    -x265-params log-level=error:colorprim=bt709:transfer=bt709:colormatrix=bt709 \
     -color_primaries bt709 -color_trc bt709 -colorspace bt709 -tag:v hvc1 \
     -c:a aac -b:a 128k -shortest "$OUT/hevc_10bit.mp4"
 fi
