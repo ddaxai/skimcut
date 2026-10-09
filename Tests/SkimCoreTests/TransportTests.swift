@@ -90,3 +90,60 @@ final class FrameGridTests: XCTestCase {
         XCTAssertEqual(FrameGrid(frameDuration: RationalTime(value: 0, timescale: 600)).secondsPerFrame, 1.0 / 30, accuracy: 1e-12)
     }
 }
+
+final class PlaybackKeyMapTests: XCTestCase {
+    private func cmd(_ code: UInt16, _ chars: String?, _ mods: KeyModifiers = []) -> PlaybackCommand? {
+        PlaybackKeyMap.command(keyCode: code, characters: chars, modifiers: mods)
+    }
+
+    func testPlainKeys() {
+        XCTAssertEqual(cmd(49, " "), .togglePlay)
+        XCTAssertEqual(cmd(38, "j"), .shuttleReverse)
+        XCTAssertEqual(cmd(40, "k"), .shuttleStop)
+        XCTAssertEqual(cmd(37, "l"), .shuttleForward)
+        XCTAssertEqual(cmd(123, nil), .stepBackward)
+        XCTAssertEqual(cmd(124, nil), .stepForward)
+        XCTAssertEqual(cmd(0, "a"), nil)
+    }
+
+    func testCapsLockLettersStillWork() {
+        XCTAssertEqual(cmd(37, "L"), .shuttleForward)
+    }
+
+    func testShiftArrowsJump() {
+        XCTAssertEqual(cmd(123, nil, .shift), .jumpBackward)
+        XCTAssertEqual(cmd(124, nil, .shift), .jumpForward)
+        XCTAssertNil(cmd(37, "l", .shift))
+        XCTAssertNil(cmd(49, " ", .shift))
+    }
+
+    func testCommandZoom() {
+        XCTAssertEqual(cmd(24, "=", .command), .zoomIn)
+        XCTAssertEqual(cmd(24, "+", [.command, .shift]), .zoomIn)
+        XCTAssertEqual(cmd(27, "-", .command), .zoomOut)
+        XCTAssertNil(cmd(37, "l", .command), "⌘L 之类留给菜单")
+        XCTAssertNil(cmd(123, nil, .command))
+    }
+
+    func testOtherModifiersAreIgnored() {
+        XCTAssertNil(cmd(49, " ", .control))
+        XCTAssertNil(cmd(124, nil, .option))
+        XCTAssertNil(cmd(24, "=", [.command, .option]))
+    }
+}
+
+final class TimelineTicksTests: XCTestCase {
+    func testInterval() {
+        XCTAssertEqual(TimelineTicks.interval(pixelsPerSecond: 10, minimumPixels: 80), 10)
+        XCTAssertEqual(TimelineTicks.interval(pixelsPerSecond: 1000, minimumPixels: 80), 0.1)
+        XCTAssertEqual(TimelineTicks.interval(pixelsPerSecond: 0.1, minimumPixels: 80), 900)
+        XCTAssertEqual(TimelineTicks.interval(pixelsPerSecond: 0.001, minimumPixels: 80), 82800)
+    }
+
+    func testLabel() {
+        XCTAssertEqual(TimelineTicks.label(0, interval: 10), "0:00")
+        XCTAssertEqual(TimelineTicks.label(75, interval: 5), "1:15")
+        XCTAssertEqual(TimelineTicks.label(3725, interval: 60), "1:02:05")
+        XCTAssertEqual(TimelineTicks.label(1.5, interval: 0.5), "0:01.5")
+    }
+}

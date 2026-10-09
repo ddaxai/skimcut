@@ -20,7 +20,7 @@
   - 只编译和测试 `SkimCore` 与 `skimcut` CLI。集成测试要真正运行 ffmpeg、ffprobe、exiftool。
   - `SkimCutApp`（SwiftUI / AVFoundation）在 Linux 上**无法编译**。不要尝试编译它，也不要为了能在 Linux 上编译而删改它的代码。
   - App 代码只用确定存在的 API（部署目标 macOS 14）。改完后开 PR，由 GitHub Actions 的 macOS 任务编译和测试（见 6.3），**看到 CI 结果之后再继续下一步**。
-  - 如果找不到 `swift` 命令，先运行 `. ~/.local/share/swiftly/env.sh`。
+  - Swift 由 setup script 装在 `/usr/bin`；如果找不到 `swift` 命令，先告诉用户。
   - 云端会话里 **GitHub GraphQL 不可用**，所以 `gh pr create`、`gh pr checks`、`gh pr view`、`gh repo list` 等命令会失败。开 PR、查 CI 一律用内置的 GitHub 工具或 REST 接口（`gh api repos/ddaxai/skimcut/...`），见 6.3。
   - 云端网络只允许 HTTPS，代理会拒绝明文 HTTP（报 405）。依赖应该由云环境的 setup script 装好；缺工具时先告诉用户，**不要**关闭 TLS 校验或修改代理设置。
 - **macOS**：所有部分都能编译、测试、打包、运行。用 `scripts/bundle-app.sh` 打包，用 `open build/SkimCut.app` 运行。
