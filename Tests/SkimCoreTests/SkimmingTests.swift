@@ -219,4 +219,16 @@ final class SkimControllerTests: XCTestCase {
         c.dwellPlaybackEnded()
         XCTAssertEqual(c.state, .skimming)
     }
+
+    func testSuspendForHandleDrag() {
+        var c = SkimController()
+        let g = generation(move(&c, x: 0, t: 1, at: 0))!
+        _ = c.timerFired(.dwell, generation: g)
+        XCTAssertEqual(c.suspend(), [.stopDwellPlayback, .cancelTimers])
+        XCTAssertEqual(c.state, .passive)
+        XCTAssertEqual(c.timerFired(.dwell, generation: g), [])
+        // 拖完再移动：恢复 skimming。
+        XCTAssertEqual(move(&c, x: 5, t: 1.2, at: 2).first, .seek(SeekRequest(time: 1.2)))
+        XCTAssertEqual(c.state, .skimming)
+    }
 }

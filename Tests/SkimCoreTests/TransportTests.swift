@@ -104,6 +104,9 @@ final class PlaybackKeyMapTests: XCTestCase {
         XCTAssertEqual(cmd(123, nil), .stepBackward)
         XCTAssertEqual(cmd(124, nil), .stepForward)
         XCTAssertEqual(cmd(0, "a"), nil)
+        XCTAssertEqual(cmd(34, "i"), .markIn)
+        XCTAssertEqual(cmd(31, "o"), .markOut)
+        XCTAssertNil(cmd(34, "i", .command))
     }
 
     func testCapsLockLettersStillWork() {

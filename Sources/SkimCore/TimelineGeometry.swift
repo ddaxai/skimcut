@@ -2,26 +2,33 @@ import Foundation
 
 /// 时间轴的缩放和滚动：时间 ↔ x 坐标的换算。
 ///
-/// `startTime` 是视图左边缘对应的时间，`pixelsPerSecond` 是缩放比例。
-/// 最小缩放是整段视频刚好铺满视图宽度；最大缩放由调用方给出（一般是“一帧一张缩略图”）。
+/// `startTime` 是内容区左边缘对应的时间，`pixelsPerSecond` 是缩放比例。
+/// 视图左右各留 `inset` 像素空白（方便抓住视频开头和结尾的手柄），中间是内容区。
+/// 最小缩放是整段视频刚好铺满内容区；最大缩放由调用方给出（一般是“一帧一张缩略图”）。
 public struct TimelineGeometry: Sendable, Equatable {
     public private(set) var duration: Double
     public private(set) var viewWidth: Double
     public private(set) var pixelsPerSecond: Double
     public private(set) var startTime: Double
     public private(set) var maxPixelsPerSecond: Double
+    /// 左右两端的空白（像素）。
+    public let inset: Double
 
-    public init(duration: Double, viewWidth: Double, maxPixelsPerSecond: Double = .infinity) {
+    public init(duration: Double, viewWidth: Double, maxPixelsPerSecond: Double = .infinity, inset: Double = 0) {
         self.duration = max(duration, 0.001)
         self.viewWidth = max(viewWidth, 1)
+        self.inset = max(inset, 0)
         self.maxPixelsPerSecond = maxPixelsPerSecond
         self.pixelsPerSecond = 0
         self.startTime = 0
         self.pixelsPerSecond = fitPixelsPerSecond
     }
 
-    /// 整段视频刚好铺满视图时的缩放比例（最小缩放）。
-    public var fitPixelsPerSecond: Double { viewWidth / duration }
+    /// 内容区宽度（视图宽度减去两端空白）。
+    public var contentWidth: Double { max(viewWidth - 2 * inset, 1) }
+
+    /// 整段视频刚好铺满内容区时的缩放比例（最小缩放）。
+    public var fitPixelsPerSecond: Double { contentWidth / duration }
 
     /// 实际的最大缩放：不会小于最小缩放。
     public var effectiveMaxPixelsPerSecond: Double { max(maxPixelsPerSecond, fitPixelsPerSecond) }
@@ -31,19 +38,19 @@ public struct TimelineGeometry: Sendable, Equatable {
 
     /// 视图里能看到的时间范围。
     public var visibleRange: ClosedRange<Double> {
-        startTime...min(duration, startTime + viewWidth / pixelsPerSecond)
+        startTime...min(duration, startTime + contentWidth / pixelsPerSecond)
     }
 
     /// 是否已经缩放到整段铺满（不能再缩小）。
     public var isFitted: Bool { pixelsPerSecond <= fitPixelsPerSecond * (1 + 1e-9) }
 
     public func x(for time: Double) -> Double {
-        (time - startTime) * pixelsPerSecond
+        inset + (time - startTime) * pixelsPerSecond
     }
 
-    /// x 坐标对应的时间，限制在 0…duration。
+    /// x 坐标对应的时间，限制在 0…duration（两端空白里分别是开头和结尾）。
     public func time(at x: Double) -> Double {
-        clampTime(startTime + x / pixelsPerSecond)
+        clampTime(startTime + (x - inset) / pixelsPerSecond)
     }
 
     public func clampTime(_ t: Double) -> Double {
@@ -53,9 +60,10 @@ public struct TimelineGeometry: Sendable, Equatable {
     /// 以视图里的 `anchorX` 为中心缩放：缩放前后 anchorX 下面的时间不变。
     public mutating func zoom(by factor: Double, anchorX: Double) {
         guard factor.isFinite, factor > 0 else { return }
-        let anchorTime = startTime + anchorX / pixelsPerSecond
+        let offset = anchorX - inset
+        let anchorTime = startTime + offset / pixelsPerSecond
         pixelsPerSecond = min(max(pixelsPerSecond * factor, fitPixelsPerSecond), effectiveMaxPixelsPerSecond)
-        startTime = anchorTime - anchorX / pixelsPerSecond
+        startTime = anchorTime - offset / pixelsPerSecond
         clampStart()
     }
 
@@ -75,7 +83,7 @@ public struct TimelineGeometry: Sendable, Equatable {
     /// 返回是否滚动了。
     @discardableResult
     public mutating func reveal(_ time: Double, margin: Double = 0) -> Bool {
-        let visibleSeconds = viewWidth / pixelsPerSecond
+        let visibleSeconds = contentWidth / pixelsPerSecond
         let marginSeconds = margin / pixelsPerSecond
         let old = startTime
         if time < startTime + marginSeconds {
@@ -106,7 +114,7 @@ public struct TimelineGeometry: Sendable, Equatable {
     }
 
     private mutating func clampStart() {
-        let visibleSeconds = viewWidth / pixelsPerSecond
+        let visibleSeconds = contentWidth / pixelsPerSecond
         startTime = min(max(startTime, 0), max(0, duration - visibleSeconds))
     }
 }

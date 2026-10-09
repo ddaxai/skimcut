@@ -22,6 +22,8 @@ AGENTS.md 没写到的小决定记在这里，附上原因。新的写在最上�
 - **VideoToolbox 的测试**：只在 macOS 上运行；GitHub 的 macOS 虚拟机里编码器不可用时，只在 CI（有 `CI` 环境变量）上跳过。
 - **CLI**：新增 `skimcut probe`（媒体信息和推测的预览方式）和 `skimcut preview`（生成预览文件，`--strategy auto|remux|proxy`，`--encoder`）。CLI 没有 AVFoundation，用 `PreviewPlanner.guessNativelyPlayable` 推测（MP4/MOV 里的 H.264/HEVC(hvc1) + 常见音频）。
 - **关闭视频**：菜单“文件 > 关闭视频”（⇧⌘W）。⌘W 仍然是关闭窗口（会退出 App）。
+- **时间轴两端留白 + 选区手柄（用户确认，提前到 M1）。** 时间轴左右各留 10 pt 空白，缩到最小时视频铺满中间的内容区；空白里鼠标对应开头 / 结尾，方便停到第一帧和最后一帧。选区默认是整段，两端是白色手柄（起点手柄在起点左侧、终点手柄在终点右侧，宽 7 pt）；拖动手柄改变起点 / 终点，吸附到最近的帧边界，画面显示选区里紧挨着手柄的那一帧；拖动开始时停止播放和 skimming 的定时器。区间外的缩略图变暗。
+- **I / O**：I 把起点设在当前显示那一帧的开头，O 把终点设在当前显示那一帧的结尾（包含这一帧）；skimming 时“当前”是 skimmer 位置，否则是播放头。起点越过终点时终点回到结尾，反之起点回到开头（和 Final Cut Pro 一样）。选区的导出在 M2 做。
 
 ## M0
 

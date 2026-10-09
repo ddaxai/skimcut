@@ -39,6 +39,8 @@ final class PlayerController {
     private(set) var rate: Float = 0
     /// 时间轴缩放和滚动。
     private(set) var timeline: TimelineGeometry
+    /// 选中的区间（剪切的起点和终点，M2 导出时使用）。默认整段。
+    private(set) var selection: TimeSelection
 
     /// 时间轴需要重画时调用（由时间轴视图设置）。
     @ObservationIgnored var redrawTimeline: (() -> Void)?
@@ -71,10 +73,13 @@ final class PlayerController {
             thumbnailHeight: TimelineMetrics.thumbnailHeight, backingScale: backingScale)
         self.thumbnails = thumbnails
 
-        var geometry = TimelineGeometry(duration: max(inspection.duration, 0.001), viewWidth: 800)
+        var geometry = TimelineGeometry(
+            duration: max(inspection.duration, 0.001), viewWidth: 800, inset: Double(TimelineMetrics.edgeInset))
         // 最大缩放：一帧一张缩略图。
         geometry.setMaxPixelsPerSecond(Double(thumbnails.thumbnailWidth) / inspection.frameGrid.secondsPerFrame)
         self.timeline = geometry
+        self.selection = TimeSelection(
+            duration: max(inspection.duration, 0.001), minimumLength: inspection.frameGrid.secondsPerFrame)
         skim.configuration = currentSkimConfiguration()
     }
 
@@ -126,6 +131,10 @@ final class PlayerController {
             zoom(by: 2)
         case .zoomOut:
             zoom(by: 0.5)
+        case .markIn:
+            markIn()
+        case .markOut:
+            markOut()
         }
     }
 
@@ -401,6 +410,56 @@ final class PlayerController {
         }
     }
 
+    // MARK: - 选区（起点 / 终点）
+
+    /// I：起点设在当前显示的那一帧的开头（skimming 时是 skimmer 位置，否则是播放头）。
+    func markIn() {
+        let index = frameGrid.frameIndex(at: displayedTime)
+        selection.markIn(at: frameGrid.time(ofFrame: index).seconds)
+        redrawTimeline?()
+    }
+
+    /// O：终点设在当前显示的那一帧的结尾（包含这一帧）。
+    func markOut() {
+        let index = frameGrid.frameIndex(at: displayedTime)
+        selection.markOut(at: min(frameGrid.time(ofFrame: index + 1).seconds, duration))
+        redrawTimeline?()
+    }
+
+    func resetSelection() {
+        selection.reset()
+        redrawTimeline?()
+    }
+
+    /// 开始拖动选区手柄：停止播放和 skimming 的定时器，画面跟着手柄走。
+    func beginHandleDrag() {
+        if mode == .user { pause() }
+        handle(skim.suspend())
+        skimmerTime = nil
+    }
+
+    /// 拖动手柄到 x：吸附到最近的帧边界，画面显示选区里紧挨着手柄的那一帧。
+    func dragHandle(_ handle: SelectionHandle, x: Double) {
+        let raw = timeline.time(at: x)
+        let boundary = min(frameGrid.time(ofFrame: Int64((raw / frameGrid.secondsPerFrame).rounded())).seconds, duration)
+        let shown: Double
+        switch handle {
+        case .start:
+            selection.moveStart(to: boundary)
+            shown = selection.start
+        case .end:
+            selection.moveEnd(to: boundary)
+            // 终点是区间的结尾，显示它前面的最后一帧。
+            shown = max(selection.start, selection.end - frameGrid.secondsPerFrame)
+        }
+        chaseSeek(SeekRequest(time: shown + 0.0001))
+        redrawTimeline?()
+    }
+
+    func endHandleDrag() {
+        redrawTimeline?()
+    }
+
     // MARK: - 缩放
 
     func zoom(by factor: Double, anchorX: Double? = nil) {
@@ -439,6 +498,10 @@ final class PlayerController {
 
 /// 时间轴的尺寸（点）。
 enum TimelineMetrics {
+    /// 时间轴左右两端的空白：视频开头和结尾的手柄在这里，鼠标也更容易停到第一帧和最后一帧。
+    static let edgeInset: CGFloat = 10
+    /// 选区手柄的宽度（放在空白里，正好能抓住）。
+    static let handleWidth: CGFloat = 7
     static let rulerHeight: CGFloat = 18
     static let thumbnailHeight: CGFloat = 56
     static let padding: CGFloat = 4
