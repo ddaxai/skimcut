@@ -10,7 +10,7 @@ A lightweight native macOS video tool (Apple Silicon, macOS 14+).
 
 Heavy work is done by proven tools: FFmpeg, ffmpeg-normalize, ExifTool and MKVToolNix.
 
-Status: M0 (skeleton). Project rules and requirements are in [`AGENTS.md`](AGENTS.md); small decisions are in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+Status: M1 (player, thumbnail timeline, skimming, preview proxies). Project rules and requirements are in [`AGENTS.md`](AGENTS.md); small decisions are in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ## Build and run
 
@@ -19,6 +19,8 @@ Requirements (macOS): Xcode 16+, and `brew install ffmpeg exiftool mkvtoolnix uc
 ```sh
 swift build && swift test           # works on macOS and Linux
 swift run skimcut tools             # check external tools
+swift run skimcut probe in.mkv      # stream info and the preview strategy
+swift run skimcut preview in.avi    # remux or proxy file the app would play
 scripts/make-test-media.sh          # generate test media into test-media/
 scripts/bundle-app.sh               # macOS only → build/SkimCut.app
 open build/SkimCut.app
