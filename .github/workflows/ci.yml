@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: linux (SkimCore + CLI)
+    runs-on: ubuntu-24.04
+    container: swift:6.1-noble
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      SKIMCUT_REQUIRE_TOOLS: "1"
+      UV_TOOL_BIN_DIR: /usr/local/bin
+      UV_INSTALL_DIR: /usr/local/bin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ffmpeg libimage-exiftool-perl mkvtoolnix uchardet curl ca-certificates
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          uv tool install ffmpeg-normalize
+
+      - name: Versions
+        run: |
+          swift --version
+          ffmpeg -hide_banner -version | head -1
+          ffmpeg-normalize --version
+
+      - name: Build
+        run: swift build 2>&1 | tee -a ci.log
+
+      - name: Test
+        run: swift test 2>&1 | tee -a ci.log
+
+      - name: CLI smoke test
+        run: swift run skimcut tools --strict 2>&1 | tee -a ci.log
+
+      - name: Upload log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-ci-log
+          path: ci.log
+          if-no-files-found: ignore
+
+      - name: Post log tail to PR
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let log = '(没有日志)';
+            try { log = fs.readFileSync('ci.log', 'utf8'); } catch (e) {}
+            const tail = log.split('\n').slice(-150).join('\n').replace(/```/g, "'''");
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: `### ❌ linux job 失败（${context.sha.slice(0, 7)}）\n\n[运行记录](${run})，日志最后 150 行：\n\n\`\`\`text\n${tail}\n\`\`\``,
+            });
+
+  macos:
+    name: macos (build + test + bundle)
+    # 只在 PR 和手动触发时运行，节省 macOS 分钟数。
+    if: github.event_name != 'push'
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      SKIMCUT_REQUIRE_TOOLS: "1"
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # bundle-app.sh 用提交数做构建号
+
+      - name: Install tools
+        run: |
+          brew install ffmpeg exiftool mkvtoolnix uchardet uv
+          uv tool install ffmpeg-normalize
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Versions
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+          ffmpeg -hide_banner -version | head -1
+          ffmpeg-normalize --version
+
+      - name: Build
+        run: swift build 2>&1 | tee -a ci.log
+
+      - name: Test
+        run: swift test 2>&1 | tee -a ci.log
+
+      - name: CLI smoke test
+        run: swift run skimcut tools --strict 2>&1 | tee -a ci.log
+
+      - name: Bundle app
+        run: scripts/bundle-app.sh 2>&1 | tee -a ci.log
+
+      - name: Zip app
+        run: ditto -c -k --keepParent build/SkimCut.app SkimCut.zip
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: SkimCut-app
+          path: SkimCut.zip
+          if-no-files-found: error
+
+      - name: Upload log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-ci-log
+          path: ci.log
+          if-no-files-found: ignore
+
+      - name: Post log tail to PR
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "### ❌ macos job 失败（${GITHUB_SHA:0:7}）"
+            echo
+            echo "[运行记录]($RUN_URL)，日志最后 150 行："
+            echo
+            echo '```text'
+            if [ -f ci.log ]; then tail -n 150 ci.log | sed "s/\`\`\`/'''/g"; else echo "(没有日志)"; fi
+            echo '```'
+          } > comment.md
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file comment.md
