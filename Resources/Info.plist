@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>SkimCut</string>
+	<key>CFBundleExecutable</key>
+	<string>SkimCutApp</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.ddaxai.SkimCut</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>SkimCut</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.1</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.video</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<!-- 系统认识的视频类型（MP4、MOV、M4V、AVI、MPEG 等都属于 public.movie）。 -->
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>视频</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.movie</string>
+				<string>public.mpeg-4</string>
+				<string>com.apple.quicktime-movie</string>
+				<string>com.apple.m4v-video</string>
+				<string>public.avi</string>
+				<string>public.mpeg</string>
+				<string>public.mpeg-2-transport-stream</string>
+			</array>
+		</dict>
+		<!-- 系统可能不认识的容器，按扩展名声明。 -->
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>其他视频</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>mkv</string>
+				<string>webm</string>
+				<string>avi</string>
+				<string>flv</string>
+				<string>wmv</string>
+				<string>ts</string>
+				<string>mts</string>
+				<string>m2ts</string>
+				<string>3gp</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
