@@ -90,6 +90,10 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+    defaults:
+      run:
+        # 明确指定 bash，GitHub 才会加 -o pipefail；否则 `swift test | tee` 的失败会被吞掉。
+        shell: bash
     env:
       SKIMCUT_REQUIRE_TOOLS: "1"
       HOMEBREW_NO_AUTO_UPDATE: "1"
