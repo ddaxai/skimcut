@@ -36,6 +36,10 @@ struct SkimCutApp: App {
                 Button("下一帧　→") { model.player?.perform(.stepForward) }
                 Button("后退几秒　Shift ←") { model.player?.perform(.jumpBackward) }
                 Button("前进几秒　Shift →") { model.player?.perform(.jumpForward) }
+                Divider()
+                Button("起点设在这里　I") { model.player?.perform(.markIn) }
+                Button("终点设在这里　O") { model.player?.perform(.markOut) }
+                Button("清除选区") { model.player?.resetSelection() }
             }
             CommandGroup(after: .toolbar) {
                 Button("放大时间轴") { model.player?.perform(.zoomIn) }

@@ -88,6 +88,10 @@ struct TransportBar: View {
 
             Spacer()
 
+            if !player.selection.isFull {
+                SelectionSummary(player: player)
+            }
+
             if player.strategy != .native {
                 Label(player.strategy == .remux ? "预览：转封装" : "预览：低分辨率代理", systemImage: "info.circle")
                     .font(.caption)
@@ -115,6 +119,32 @@ struct TransportBar: View {
         let magnitude = abs(rate)
         let number = magnitude == magnitude.rounded() ? String(Int(magnitude)) : String(magnitude)
         return (rate < 0 ? "◀︎ " : "▶︎ ") + number + "×"
+    }
+}
+
+/// 选区的起点、终点和时长（按 I / O 或拖动时间轴两端的手柄设置）。
+struct SelectionSummary: View {
+    let player: PlayerController
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "timeline.selection")
+                .foregroundStyle(.secondary)
+            Text("\(Timecode.format(player.selection.start)) – \(Timecode.format(player.selection.end))")
+                .font(.system(.body, design: .monospaced))
+            Text("时长 \(Timecode.format(player.selection.length))")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Button {
+                player.resetSelection()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.borderless)
+            .focusable(false)
+            .help("清除选区（恢复为整段）")
+        }
+        .help("选中的区间：按 I / O 设起点 / 终点，或拖动时间轴两端的白色手柄")
     }
 }
 

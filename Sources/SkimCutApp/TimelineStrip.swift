@@ -2,14 +2,16 @@ import AppKit
 import SkimCore
 import SwiftUI
 
-/// 时间轴：缩略图条 + 刻度 + 播放头（黄色）+ skimmer（红色）。
+/// 时间轴：缩略图条 + 刻度 + 选区（白框和两端手柄）+ 播放头（黄色）+ skimmer（红色）。
 ///
 /// - 鼠标悬停移动：skimming（不需要点击）；
-/// - 点击 / 拖动：移动播放头；
+/// - 点击 / 拖动：移动播放头；拖动选区两端的手柄：改变起点 / 终点；
 /// - 触控板捏合、⌘+ / ⌘-：缩放；横向滑动或滚轮：滚动。
 /// 用 AppKit 的 NSTrackingArea 追踪鼠标，只在鼠标移动时产生事件，空闲时没有任何开销。
 final class TimelineNSView: KeyHandlingView {
     private var trackingArea: NSTrackingArea?
+    /// 正在拖动的手柄。
+    private var draggingHandle: SelectionHandle?
 
     override var isFlipped: Bool { false }
     override var isOpaque: Bool { true }
@@ -53,20 +55,61 @@ final class TimelineNSView: KeyHandlingView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        controller?.pointerMoved(x: localX(event), timestamp: event.timestamp)
+        let x = localX(event)
+        updateCursor(x: x)
+        controller?.pointerMoved(x: x, timestamp: event.timestamp)
     }
 
     override func mouseExited(with event: NSEvent) {
+        if draggingHandle == nil { NSCursor.arrow.set() }
         controller?.pointerExited()
     }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        controller?.clicked(x: localX(event))
+        let x = localX(event)
+        if let handle = handleHit(x: x), let controller {
+            draggingHandle = handle
+            controller.beginHandleDrag()
+            controller.dragHandle(handle, x: x)
+            return
+        }
+        controller?.clicked(x: x)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        controller?.clicked(x: localX(event))
+        let x = localX(event)
+        if let handle = draggingHandle {
+            controller?.dragHandle(handle, x: x)
+        } else {
+            controller?.clicked(x: x)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard draggingHandle != nil else { return }
+        draggingHandle = nil
+        controller?.endHandleDrag()
+        updateCursor(x: localX(event))
+    }
+
+    /// 鼠标是否在选区两端的手柄上。
+    private func handleHit(x: Double) -> SelectionHandle? {
+        guard let controller else { return nil }
+        let geometry = controller.timeline
+        return SelectionHandle.hitTest(
+            x: x,
+            startX: geometry.x(for: controller.selection.start),
+            endX: geometry.x(for: controller.selection.end),
+            tolerance: Double(TimelineMetrics.handleWidth) + 2)
+    }
+
+    private func updateCursor(x: Double) {
+        if handleHit(x: x) != nil {
+            NSCursor.resizeLeftRight.set()
+        } else {
+            NSCursor.arrow.set()
+        }
     }
 
     override func magnify(with event: NSEvent) {
@@ -108,12 +151,18 @@ final class TimelineNSView: KeyHandlingView {
         drawThumbnails(controller, geometry: geometry, strip: strip, ctx: ctx)
         drawRuler(geometry, bottom: rulerBottom)
 
-        // 视频结尾之后的区域。
+        // 视频开头之前、结尾之后的区域（两端的空白）。
+        let startX = CGFloat(geometry.x(for: 0))
         let endX = CGFloat(geometry.x(for: controller.duration))
+        NSColor(white: 0.06, alpha: 1).setFill()
+        if startX > 0 {
+            NSRect(x: 0, y: 0, width: startX, height: bounds.height).fill()
+        }
         if endX < bounds.width {
-            NSColor(white: 0.06, alpha: 1).setFill()
             NSRect(x: endX, y: 0, width: bounds.width - endX, height: bounds.height).fill()
         }
+
+        drawSelection(controller, geometry: geometry, strip: strip)
 
         // 播放头：黄色，顶部带一个小三角。
         let playheadX = CGFloat(geometry.x(for: controller.playhead)).rounded(.down) + 0.5
@@ -176,6 +225,41 @@ final class TimelineNSView: KeyHandlingView {
         }
         ctx.restoreGState()
         thumbnails.request(slots)
+    }
+
+    /// 选区：区间外的缩略图变暗，区间加白框，两端是可以拖动的手柄。
+    private func drawSelection(_ controller: PlayerController, geometry: TimelineGeometry, strip: NSRect) {
+        let selection = controller.selection
+        let videoStart = CGFloat(geometry.x(for: 0))
+        let videoEnd = CGFloat(geometry.x(for: controller.duration))
+        let sx = CGFloat(geometry.x(for: selection.start))
+        let ex = CGFloat(geometry.x(for: selection.end))
+
+        NSColor(white: 0, alpha: 0.6).setFill()
+        if sx > videoStart {
+            NSRect(x: videoStart, y: strip.minY, width: sx - videoStart, height: strip.height).fill()
+        }
+        if ex < videoEnd {
+            NSRect(x: ex, y: strip.minY, width: videoEnd - ex, height: strip.height).fill()
+        }
+
+        let color = NSColor.white
+        color.setFill()
+        // 上下边框。
+        NSRect(x: sx, y: strip.maxY - 2, width: ex - sx, height: 2).fill()
+        NSRect(x: sx, y: strip.minY, width: ex - sx, height: 2).fill()
+
+        // 两端手柄：起点手柄在起点左边，终点手柄在终点右边。
+        let w = TimelineMetrics.handleWidth
+        for x in [sx - w, ex] {
+            let rect = NSRect(x: x, y: strip.minY, width: w, height: strip.height)
+            guard rect.maxX >= 0, rect.minX <= bounds.width else { continue }
+            color.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 2, yRadius: 2).fill()
+            // 手柄上的握把线。
+            NSColor(white: 0.3, alpha: 1).setFill()
+            NSRect(x: rect.midX - 0.5, y: rect.midY - 8, width: 1, height: 16).fill()
+        }
     }
 
     private static let labelAttributes: [NSAttributedString.Key: Any] = [

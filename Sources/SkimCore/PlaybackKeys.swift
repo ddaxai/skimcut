@@ -21,6 +21,10 @@ public enum PlaybackCommand: Sendable, Equatable {
     case jumpForward
     case zoomIn
     case zoomOut
+    /// I：起点设在当前位置。
+    case markIn
+    /// O：终点设在当前位置。
+    case markOut
 }
 
 public struct KeyModifiers: OptionSet, Sendable, Hashable {
@@ -63,6 +67,8 @@ public enum PlaybackKeyMap {
         case "j": return .shuttleReverse
         case "k": return .shuttleStop
         case "l": return .shuttleForward
+        case "i": return .markIn
+        case "o": return .markOut
         default: return nil
         }
     }

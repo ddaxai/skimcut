@@ -230,6 +230,17 @@ public struct SkimController: Sendable {
         return [.cancelTimers]
     }
 
+    /// 开始拖动选区手柄：停掉定时器和停留播放，画面交给拖动控制。
+    /// 拖完以后鼠标再移动就恢复 skimming。
+    public mutating func suspend() -> [Action] {
+        var actions: [Action] = []
+        if state == .dwellPlaying { actions.append(.stopDwellPlayback) }
+        if state == .skimming || state == .dwellPlaying { actions.append(.cancelTimers) }
+        if state != .outside { state = .passive }
+        generation += 1
+        return actions
+    }
+
     /// 设置变了（关闭 skimming 时回到播放头）。
     public mutating func updateConfiguration(_ new: Configuration) -> [Action] {
         configuration = new

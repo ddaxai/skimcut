@@ -195,3 +195,82 @@ final class LRUCacheTests: XCTestCase {
         XCTAssertFalse(cache.contains("a"))
     }
 }
+
+final class TimelineInsetTests: XCTestCase {
+    func testInsetLeavesMarginsAtBothEnds() {
+        let g = TimelineGeometry(duration: 100, viewWidth: 1020, inset: 10)
+        XCTAssertEqual(g.contentWidth, 1000)
+        XCTAssertEqual(g.pixelsPerSecond, 10)
+        XCTAssertEqual(g.x(for: 0), 10)
+        XCTAssertEqual(g.x(for: 100), 1010)
+        XCTAssertEqual(g.time(at: 510), 50)
+        // 空白里分别是开头和结尾。
+        XCTAssertEqual(g.time(at: 3), 0)
+        XCTAssertEqual(g.time(at: 1018), 100)
+        XCTAssertEqual(g.visibleRange, 0...100)
+    }
+
+    func testZoomWithInsetKeepsAnchor() {
+        var g = TimelineGeometry(duration: 100, viewWidth: 1020, inset: 10)
+        let before = g.time(at: 310)
+        g.zoom(by: 4, anchorX: 310)
+        XCTAssertEqual(g.time(at: 310), before, accuracy: 1e-9)
+        g.scroll(byPixels: 1_000_000)
+        XCTAssertEqual(g.x(for: 100), 1010, accuracy: 1e-9, "滚到最右时结尾停在右侧空白之前")
+    }
+}
+
+final class TimeSelectionTests: XCTestCase {
+    func testStartsFull() {
+        let s = TimeSelection(duration: 10, minimumLength: 0.04)
+        XCTAssertEqual(s.start, 0)
+        XCTAssertEqual(s.end, 10)
+        XCTAssertTrue(s.isFull)
+    }
+
+    func testDraggingIsClamped() {
+        var s = TimeSelection(duration: 10, minimumLength: 0.04)
+        s.moveStart(to: 3)
+        s.moveEnd(to: 7)
+        XCTAssertEqual(s.start, 3)
+        XCTAssertEqual(s.end, 7)
+        XCTAssertEqual(s.length, 4)
+        XCTAssertFalse(s.isFull)
+        s.moveStart(to: 9)
+        XCTAssertEqual(s.start, 6.96, accuracy: 1e-9, "起点不能越过终点")
+        s.moveEnd(to: 1)
+        XCTAssertEqual(s.end, 7, accuracy: 1e-9, "终点不能越过起点")
+        s.moveStart(to: -5)
+        s.moveEnd(to: 50)
+        XCTAssertTrue(s.isFull)
+    }
+
+    func testMarkInAndOut() {
+        var s = TimeSelection(duration: 10, minimumLength: 0.04)
+        s.markIn(at: 2)
+        s.markOut(at: 5)
+        XCTAssertEqual(s.start, 2)
+        XCTAssertEqual(s.end, 5)
+        // 起点设在终点之后：终点回到结尾。
+        s.markIn(at: 6)
+        XCTAssertEqual(s.start, 6)
+        XCTAssertEqual(s.end, 10)
+        // 终点设在起点之前：起点回到开头。
+        s.markOut(at: 4)
+        XCTAssertEqual(s.start, 0)
+        XCTAssertEqual(s.end, 4)
+        s.reset()
+        XCTAssertTrue(s.isFull)
+    }
+
+    func testHandleHitTest() {
+        XCTAssertEqual(SelectionHandle.hitTest(x: 95, startX: 100, endX: 300), .start)
+        XCTAssertEqual(SelectionHandle.hitTest(x: 103, startX: 100, endX: 300), .start)
+        XCTAssertNil(SelectionHandle.hitTest(x: 106, startX: 100, endX: 300))
+        XCTAssertEqual(SelectionHandle.hitTest(x: 306, startX: 100, endX: 300), .end)
+        XCTAssertNil(SelectionHandle.hitTest(x: 200, startX: 100, endX: 300))
+        // 两个手柄挨在一起：按中点分。
+        XCTAssertEqual(SelectionHandle.hitTest(x: 100, startX: 100, endX: 102), .start)
+        XCTAssertEqual(SelectionHandle.hitTest(x: 103, startX: 100, endX: 102), .end)
+    }
+}
