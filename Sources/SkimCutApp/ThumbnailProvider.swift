@@ -56,8 +56,9 @@ final class ThumbnailProvider {
 
         batch += 1
         let currentBatch = batch
-        // 容差：格子间隔的一半，最多 2 秒。解码器可以就近取关键帧，生成快很多。
-        let tolerance = CMTime(seconds: min((missing.first?.interval ?? 1) / 2, 2), preferredTimescale: Self.timescale)
+        // 容差：请求的是格子中间，容差不超过格子的四分之一（最多 2 秒），取到的帧一定在这个格子里。
+        // 解码器可以就近取关键帧，生成快很多。
+        let tolerance = CMTime(seconds: min((missing.first?.interval ?? 1) / 4, 2), preferredTimescale: Self.timescale)
         generator.requestedTimeToleranceBefore = tolerance
         generator.requestedTimeToleranceAfter = tolerance
 

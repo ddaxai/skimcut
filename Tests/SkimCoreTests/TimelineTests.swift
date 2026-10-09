@@ -120,11 +120,20 @@ final class ThumbnailLadderTests: XCTestCase {
         XCTAssertTrue(slots.allSatisfy { $0.interval == 2 && $0.key.level == 1 })
     }
 
+    func testRequestsMiddleOfSlotNotItsStart() {
+        // 第一格不取第 0 秒（很多视频开头是黑的），取格子中间。
+        let slots = ThumbnailLadder.slots(level: 3, visible: 0...40, duration: 40)
+        XCTAssertEqual(slots.map(\.requestTime), [4, 12, 20, 28, 36])
+    }
+
     func testLastSlotRequestStaysInsideVideo() {
         let slots = ThumbnailLadder.slots(level: 2, visible: 0...10, duration: 10)
         XCTAssertEqual(slots.map(\.key.index), [0, 1, 2])
         XCTAssertEqual(slots.last?.startTime, 8)
-        XCTAssertLessThan(slots.last!.requestTime, 10)
+        // 最后一格只有 8…10 秒在视频里：取 9 秒。
+        XCTAssertEqual(slots.last!.requestTime, 9, accuracy: 1e-9)
+        // 很短的视频：不超过末尾前 0.05 秒。
+        XCTAssertEqual(ThumbnailLadder.slots(level: 0, visible: 0...0.06, duration: 0.06).first!.requestTime, 0.01, accuracy: 1e-9)
         // 正好在末尾的格子不生成。
         XCTAssertEqual(ThumbnailLadder.slots(level: 1, visible: 0...10, duration: 10).count, 5)
     }
