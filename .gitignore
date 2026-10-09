@@ -1,0 +1,15 @@
+# SwiftPM / Xcode
+.build/
+.swiftpm/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+
+# App bundle output
+build/
+
+# Generated test media
+test-media/
+
+# macOS
+.DS_Store
