@@ -132,7 +132,8 @@ public struct ThumbnailSlot: Sendable, Equatable {
     public let startTime: Double
     /// 格子覆盖的时长。
     public let interval: Double
-    /// 向解码器请求的帧时间：格子开头，不超过视频末尾。
+    /// 向解码器请求的帧时间：格子（在视频范围内那部分）的中间。
+    /// 不取格子开头：很多视频第 0 秒是黑的（相机刚开始录、淡入），缩小时第一格会整格变黑。
     public let requestTime: Double
 }
 
@@ -162,11 +163,12 @@ public enum ThumbnailLadder {
         let latest = max(0, duration - 0.05)
         return (first...last).map { i in
             let start = Double(i) * interval
+            let end = min(start + interval, duration)
             return ThumbnailSlot(
                 key: ThumbnailKey(level: level, index: i),
                 startTime: start,
                 interval: interval,
-                requestTime: min(start, latest)
+                requestTime: min((start + end) / 2, latest)
             )
         }
     }
