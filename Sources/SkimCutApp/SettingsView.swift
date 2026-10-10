@@ -11,6 +11,7 @@ enum AppSettings {
     /// 默认输出目录；空字符串表示放在原文件旁边。
     static let outputDirectoryKey = "outputDirectoryPath"
     static let shiftRecordingDateKey = "shiftRecordingDate"
+    static let defaultSubtitleLanguageKey = "defaultSubtitleLanguage"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -20,6 +21,7 @@ enum AppSettings {
             defaultCutModeKey: CutMode.precise.rawValue,
             outputDirectoryKey: "",
             shiftRecordingDateKey: true,
+            defaultSubtitleLanguageKey: SubtitleLanguages.defaultCode,
         ])
     }
 
@@ -34,6 +36,11 @@ enum AppSettings {
         guard !path.isEmpty, FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue
         else { return nil }
         return URL(fileURLWithPath: path, isDirectory: true)
+    }
+
+    /// 新加字幕的默认语言（ISO 639-2）。
+    static var defaultSubtitleLanguage: String {
+        SubtitleLanguages.normalize(UserDefaults.standard.string(forKey: defaultSubtitleLanguageKey) ?? SubtitleLanguages.defaultCode)
     }
 
     static var shiftRecordingDate: Bool {
@@ -67,6 +74,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.defaultCutModeKey) private var defaultCutMode = CutMode.precise.rawValue
     @AppStorage(AppSettings.outputDirectoryKey) private var outputDirectory = ""
     @AppStorage(AppSettings.shiftRecordingDateKey) private var shiftRecordingDate = true
+    @AppStorage(AppSettings.defaultSubtitleLanguageKey) private var defaultSubtitleLanguage = SubtitleLanguages.defaultCode
 
     var body: some View {
         Form {
@@ -96,6 +104,13 @@ struct SettingsView: View {
                     }
                 }
                 Toggle("剪出的片段：录制时间 = 原录制时间 + 剪切起点", isOn: $shiftRecordingDate)
+            }
+            Section("字幕") {
+                Picker("新加字幕的默认语言", selection: $defaultSubtitleLanguage) {
+                    ForEach(SubtitleLanguages.common, id: \.code) { item in
+                        Text("\(item.name)（\(item.code)）").tag(item.code)
+                    }
+                }
             }
             Section("键盘") {
                 Stepper(value: $jumpSeconds, in: 0.5...60, step: 0.5) {
