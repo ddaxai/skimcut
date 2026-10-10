@@ -26,13 +26,18 @@ public struct MediaStream: Sendable, Equatable {
     public var colorRange: String?
     /// 带 Dolby Vision 配置（重新编码时保留不了）。
     public var hasDolbyVision: Bool
+    /// 轨道标题（`tags.title`，MP4 里常见的是 `handler_name`）。
+    public var title: String?
+    /// 是否是默认轨道（`disposition.default`）。
+    public var isDefault: Bool
 
     public init(
         index: Int, codecType: String, codecName: String? = nil, codecTagString: String? = nil,
         profile: String? = nil, width: Int? = nil, height: Int? = nil, pixelFormat: String? = nil,
         frameRate: Double? = nil, duration: Double? = nil, colorTransfer: String? = nil,
         colorPrimaries: String? = nil, isAttachedPicture: Bool = false, language: String? = nil,
-        colorSpace: String? = nil, colorRange: String? = nil, hasDolbyVision: Bool = false
+        colorSpace: String? = nil, colorRange: String? = nil, hasDolbyVision: Bool = false,
+        title: String? = nil, isDefault: Bool = false
     ) {
         self.index = index
         self.codecType = codecType
@@ -51,10 +56,13 @@ public struct MediaStream: Sendable, Equatable {
         self.colorSpace = colorSpace
         self.colorRange = colorRange
         self.hasDolbyVision = hasDolbyVision
+        self.title = title
+        self.isDefault = isDefault
     }
 
     public var isVideo: Bool { codecType == "video" && !isAttachedPicture }
     public var isAudio: Bool { codecType == "audio" }
+    public var isSubtitle: Bool { codecType == "subtitle" }
 
     /// 10-bit 及以上（看像素格式名里的位深）。
     public var isHighBitDepth: Bool {
@@ -90,6 +98,7 @@ public struct MediaInfo: Sendable, Equatable {
     /// 第一条真正的视频流（跳过封面图）。
     public var videoStream: MediaStream? { streams.first(where: \.isVideo) }
     public var audioStreams: [MediaStream] { streams.filter(\.isAudio) }
+    public var subtitleStreams: [MediaStream] { streams.filter(\.isSubtitle) }
 
     /// 总时长：优先容器时长，没有时取各条流里最长的。
     public var bestDuration: Double? {
@@ -161,8 +170,17 @@ public struct MediaInfo: Sendable, Equatable {
             language: tags["language"] as? String,
             colorSpace: s["color_space"] as? String,
             colorRange: s["color_range"] as? String,
-            hasDolbyVision: hasDolbyVision(s)
+            hasDolbyVision: hasDolbyVision(s),
+            title: (tags["title"] as? String) ?? genericHandlerFiltered(tags["handler_name"] as? String),
+            isDefault: int(disposition["default"]) == 1
         )
+    }
+
+    /// MP4 的 handler_name 常常是 `SubtitleHandler` 之类的默认值，这些不算标题。
+    private static func genericHandlerFiltered(_ name: String?) -> String? {
+        guard let name, !name.isEmpty else { return nil }
+        let generic = ["SubtitleHandler", "VideoHandler", "SoundHandler", "TextHandler", "Core Media Text", "Core Media Video", "Core Media Audio"]
+        return generic.contains(name) ? nil : name
     }
 
     /// Dolby Vision：流的 side data 里有 DOVI 配置记录，或者编码标签是 dvh1 / dvhe / dva1 / dvav。
