@@ -31,9 +31,8 @@ struct ContentView: View {
         }
         .navigationTitle(model.player?.sourceURL.lastPathComponent ?? "SkimCut")
         .dropDestination(for: URL.self) { urls, _ in
-            guard let url = urls.first(where: \.isFileURL) else { return false }
-            model.open(url)
-            return true
+            // 字幕文件加进字幕面板，视频文件打开。
+            model.handleDrop(urls.filter(\.isFileURL))
         } isTargeted: { targeted in
             isDropTargeted = targeted
         }
@@ -57,11 +56,46 @@ struct PlayerScreen: View {
             TransportBar(player: player)
             TimelineStrip(controller: player)
                 .frame(height: TimelineMetrics.totalHeight)
-            if let cut {
-                CutPanel(player: player, cut: cut, model: model)
-            }
+            BottomPanelSwitcher(player: player, cut: cut, model: model)
         }
         .background(Color.black)
+    }
+}
+
+/// 时间轴下面的面板：剪切 / 字幕。
+struct BottomPanelSwitcher: View {
+    let player: PlayerController
+    let cut: CutController?
+    @Bindable var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Picker("", selection: $model.bottomPanel) {
+                    ForEach(BottomPanel.allCases) { panel in
+                        Text(panel.title).tag(panel)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .background(.bar)
+
+            switch model.bottomPanel {
+            case .cut:
+                if let cut {
+                    CutPanel(player: player, cut: cut, model: model)
+                }
+            case .subtitles:
+                if let subtitles = model.subtitles {
+                    SubtitlePanel(player: player, subtitles: subtitles, model: model)
+                }
+            }
+        }
     }
 }
 

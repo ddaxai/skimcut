@@ -19,6 +19,10 @@ final class AppModel {
     private(set) var player: PlayerController?
     /// 当前视频的剪切面板状态。
     private(set) var cut: CutController?
+    /// 当前视频的字幕面板状态。
+    private(set) var subtitles: SubtitleController?
+    /// 时间轴下面显示哪个面板。
+    var bottomPanel: BottomPanel = .cut
     /// 导出记录（任务的进度和状态来自 `jobs`）。
     private(set) var exports: [ExportRecord] = []
     private(set) var loadState: LoadState = .idle
@@ -83,6 +87,7 @@ final class AppModel {
         }
         player = nil
         cut = nil
+        subtitles = nil
         loadState = .idle
     }
 
@@ -209,6 +214,7 @@ final class AppModel {
             sourceURL: source, playbackURL: playback, strategy: strategy,
             inspection: inspection, backingScale: scale)
         cut = CutController(source: source)
+        subtitles = SubtitleController(source: source)
         loadState = .idle
         openTask = nil
     }
@@ -250,6 +256,52 @@ final class AppModel {
                 }
             }
         }
+    }
+
+    /// 加字幕（视频和音频不重新编码），进任务队列。原文件永远不变。
+    func exportSubtitles(_ job: SubtitleJob) {
+        var title = "加字幕 \(job.source.lastPathComponent)（\(job.tracks.count) 条，\(job.container.displayName)）"
+        if let range = job.range {
+            title += "  \(Timecode.format(range.start)) – \(Timecode.format(range.end))"
+        }
+        let exporter = SubtitleExporter()
+        let queue = self.queue
+        Task { @MainActor [weak self] in
+            let id = await queue.enqueue(title: title) { [weak self] context in
+                let model = self
+                let info = try await MediaInfo.probe(job.source)
+                let result = try await exporter.export(job, info: info) { progress in
+                    context.report(progress: progress)
+                }
+                var note = result.warnings.first
+                if let k = result.actualStart, let range = job.range, range.start - k >= 0.0005 {
+                    note = String(format: "实际起点提前了 %.3f 秒（从 ", range.start - k) + Timecode.format(k) + " 开始），字幕已按它平移。"
+                }
+                await model?.exportPlanned(id: context.id, output: result.output, note: note)
+            }
+            guard let self else { return }
+            if !self.exports.contains(where: { $0.id == id }) {
+                self.exports.append(ExportRecord(id: id, title: title))
+            }
+        }
+    }
+
+    /// 拖进窗口的文件：字幕文件加进字幕面板，否则当成视频打开。
+    func handleDrop(_ urls: [URL]) -> Bool {
+        let subtitleFiles = urls.filter(SubtitleFormat.isSubtitleFile)
+        let others = urls.filter { !SubtitleFormat.isSubtitleFile($0) }
+        if let video = others.first {
+            open(video)
+            return true
+        }
+        guard !subtitleFiles.isEmpty else { return false }
+        guard let subtitles else {
+            loadState = .failed(message: "请先打开视频，再把字幕文件拖进来。", log: nil)
+            return true
+        }
+        subtitles.addFiles(subtitleFiles)
+        bottomPanel = .subtitles
+        return true
     }
 
     private func exportPlanned(id: JobID, output: URL, note: String?) {
@@ -315,5 +367,20 @@ struct ExportRecord: Identifiable, Equatable {
     init(id: JobID, title: String) {
         self.id = id
         self.title = title
+    }
+}
+
+/// 时间轴下面的面板。
+enum BottomPanel: String, CaseIterable, Identifiable {
+    case cut
+    case subtitles
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .cut: return "剪切"
+        case .subtitles: return "字幕"
+        }
     }
 }
