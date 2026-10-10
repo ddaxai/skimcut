@@ -20,12 +20,19 @@ public struct MediaStream: Sendable, Equatable {
     /// 封面图（MP3/MP4 里常见），不算真正的视频流。
     public var isAttachedPicture: Bool
     public var language: String?
+    /// 例如 `bt709`、`bt2020nc`。
+    public var colorSpace: String?
+    /// `tv`（有限范围）或 `pc`（全范围）。
+    public var colorRange: String?
+    /// 带 Dolby Vision 配置（重新编码时保留不了）。
+    public var hasDolbyVision: Bool
 
     public init(
         index: Int, codecType: String, codecName: String? = nil, codecTagString: String? = nil,
         profile: String? = nil, width: Int? = nil, height: Int? = nil, pixelFormat: String? = nil,
         frameRate: Double? = nil, duration: Double? = nil, colorTransfer: String? = nil,
-        colorPrimaries: String? = nil, isAttachedPicture: Bool = false, language: String? = nil
+        colorPrimaries: String? = nil, isAttachedPicture: Bool = false, language: String? = nil,
+        colorSpace: String? = nil, colorRange: String? = nil, hasDolbyVision: Bool = false
     ) {
         self.index = index
         self.codecType = codecType
@@ -41,6 +48,9 @@ public struct MediaStream: Sendable, Equatable {
         self.colorPrimaries = colorPrimaries
         self.isAttachedPicture = isAttachedPicture
         self.language = language
+        self.colorSpace = colorSpace
+        self.colorRange = colorRange
+        self.hasDolbyVision = hasDolbyVision
     }
 
     public var isVideo: Bool { codecType == "video" && !isAttachedPicture }
@@ -64,11 +74,15 @@ public struct MediaStream: Sendable, Equatable {
 public struct MediaInfo: Sendable, Equatable {
     /// 例如 `mov,mp4,m4a,3gp,3g2,mj2`、`matroska,webm`、`avi`。
     public var formatName: String
+    /// 容器的起始时间（ffprobe `format.start_time`）。ffmpeg 的 `-ss` 是相对这个时间的，
+    /// 所以 ffprobe 读到的绝对时间要减去它才能和 `-ss` 对上。
+    public var startTime: Double
     public var duration: Double?
     public var streams: [MediaStream]
 
-    public init(formatName: String, duration: Double?, streams: [MediaStream]) {
+    public init(formatName: String, duration: Double?, streams: [MediaStream], startTime: Double = 0) {
         self.formatName = formatName
+        self.startTime = startTime
         self.duration = duration
         self.streams = streams
     }
@@ -121,7 +135,8 @@ public struct MediaInfo: Sendable, Equatable {
         return MediaInfo(
             formatName: format["format_name"] as? String ?? "",
             duration: number(format["duration"]),
-            streams: streams
+            streams: streams,
+            startTime: number(format["start_time"]) ?? 0
         )
     }
 
@@ -143,8 +158,20 @@ public struct MediaInfo: Sendable, Equatable {
             colorTransfer: s["color_transfer"] as? String,
             colorPrimaries: s["color_primaries"] as? String,
             isAttachedPicture: int(disposition["attached_pic"]) == 1,
-            language: tags["language"] as? String
+            language: tags["language"] as? String,
+            colorSpace: s["color_space"] as? String,
+            colorRange: s["color_range"] as? String,
+            hasDolbyVision: hasDolbyVision(s)
         )
+    }
+
+    /// Dolby Vision：流的 side data 里有 DOVI 配置记录，或者编码标签是 dvh1 / dvhe / dva1 / dvav。
+    private static func hasDolbyVision(_ s: [String: Any]) -> Bool {
+        if let tag = s["codec_tag_string"] as? String, ["dvh1", "dvhe", "dva1", "dvav"].contains(tag) {
+            return true
+        }
+        let sideData = s["side_data_list"] as? [[String: Any]] ?? []
+        return sideData.contains { ($0["side_data_type"] as? String)?.contains("DOVI") == true }
     }
 
     /// `30000/1001` → 29.97；`0/0` → nil。
