@@ -73,6 +73,10 @@ final class PlayerLayerView: KeyHandlingView {
         guard self.controller !== controller || playerLayer.player !== controller?.player else { return }
         self.controller = controller
         playerLayer.player = controller?.player
+        controller?.focusPlayer = { [weak self] in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self)
+        }
         if controller != nil {
             Task { @MainActor [weak self] in self?.becomeKeyTarget() }
         }

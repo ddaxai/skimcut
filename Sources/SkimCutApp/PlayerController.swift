@@ -44,6 +44,8 @@ final class PlayerController {
 
     /// 时间轴需要重画时调用（由时间轴视图设置）。
     @ObservationIgnored var redrawTimeline: (() -> Void)?
+    /// 让播放画面重新接收键盘（在输入框里按回车之后）。由播放画面设置。
+    @ObservationIgnored var focusPlayer: (() -> Void)?
 
     @ObservationIgnored private var chase = ChaseSeeker()
     @ObservationIgnored private var skim = SkimController()
@@ -92,6 +94,7 @@ final class PlayerController {
         player.replaceCurrentItem(with: nil)
         thumbnails.close()
         redrawTimeline = nil
+        focusPlayer = nil
     }
 
     var isPlaying: Bool { mode != .paused }
@@ -423,6 +426,35 @@ final class PlayerController {
     func markOut() {
         let index = frameGrid.frameIndex(at: displayedTime)
         selection.markOut(at: min(frameGrid.time(ofFrame: index + 1).seconds, duration))
+        redrawTimeline?()
+    }
+
+    /// 输入框设置起点：对齐到这个时间所在那一帧的开头。
+    func setSelectionStart(_ t: Double) {
+        let index = frameGrid.frameIndex(at: min(max(t, 0), duration))
+        selection.markIn(at: frameGrid.time(ofFrame: index).seconds)
+        redrawTimeline?()
+    }
+
+    /// 输入框设置终点：对齐到最近的帧边界。
+    func setSelectionEnd(_ t: Double) {
+        let boundary = frameGrid.time(ofFrame: Int64((max(t, 0) / frameGrid.secondsPerFrame).rounded())).seconds
+        selection.markOut(at: min(boundary, duration))
+        redrawTimeline?()
+    }
+
+    /// 当前选区（导出用）。
+    var selectedRange: CutRange { CutRange(start: selection.start, end: selection.end) }
+
+    /// 把选区设成列表里保存的某个区间（点击列表时预览）。
+    func select(_ range: CutRange) {
+        selection.reset()
+        selection.moveEnd(to: range.end)
+        selection.moveStart(to: range.start)
+        playhead = range.start
+        if mode != .paused { pause() }
+        chaseSeek(SeekRequest(time: range.start + 0.0001))
+        timeline.reveal(range.start)
         redrawTimeline?()
     }
 

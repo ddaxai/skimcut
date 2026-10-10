@@ -201,23 +201,11 @@ public struct PreviewBuilder: Sendable {
         else { return }
         let command = try locator.command(.ffmpeg, args)
         let total = info.bestDuration
-        let parser = ProgressParserBox()
+        let parser = LockedParser()
         _ = try await runner.run(command, partialOutputs: [output], onStdoutLine: { line in
             if let snapshot = parser.consume(line), let progress {
                 progress(snapshot.fraction(totalDuration: total))
             }
         })
-    }
-}
-
-/// 在读输出的线程里串行使用，加锁只是为了满足 Sendable。
-private final class ProgressParserBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var parser = FFmpegProgressParser()
-
-    func consume(_ line: String) -> FFmpegProgress? {
-        lock.lock()
-        defer { lock.unlock() }
-        return parser.consume(line: line)
     }
 }
