@@ -99,8 +99,11 @@ struct CutPanel: View {
             .help("可以输入 1:23.456、00:01:23.456 或 83.456")
             .onSubmit {
                 if field == .start { applyStart() } else { applyEnd() }
-                focused = nil
-                player.focusPlayer?()
+                // 等 SwiftUI 处理完这次回车再把键盘交给播放画面；同步调用会被随后的焦点更新抢回去。
+                Task { @MainActor in
+                    await Task.yield()
+                    player.focusPlayer?()
+                }
             }
     }
 

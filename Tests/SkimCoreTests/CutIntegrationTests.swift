@@ -260,6 +260,39 @@ final class CutIntegrationTests: XCTestCase {
         XCTAssertEqual(result.recordingDates, RecordingDates())
     }
 
+    // MARK: - 不覆盖、不删除别人的文件
+
+    /// 规划之后目标文件名被别的程序占用：那个文件不能被删除或修改，新文件顺延成 `_2`，也不能误报成功。
+    func testOutputTakenAfterPlanningIsNeverTouched() async throws {
+        let media = try TestSupport.testMedia()
+        _ = try TestSupport.requireTool(.exiftool)
+        let dir = try TestSupport.makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = dir.appendingPathComponent("src.mp4")
+        try FileManager.default.copyItem(at: media.appendingPathComponent("h264_gop4.mp4"), to: source)
+        let exporter = CutExporter(runner: runner, encoder: .software(lossless: false))
+
+        for mode in CutMode.allCases {
+            let plan = try await exporter.plan(
+                source: source, info: try await probe(source), range: CutRange(start: 5, end: 6),
+                options: CutOptions(mode: mode))
+            let squatter = Data("别人的文件 \(mode)".utf8)
+            try squatter.write(to: plan.output)
+
+            let result = try await exporter.export(plan)
+            XCTAssertEqual(try Data(contentsOf: plan.output), squatter, "\(mode)：已有文件被修改了")
+            XCTAssertNotEqual(result.output, plan.output)
+            XCTAssertTrue(result.output.lastPathComponent.hasSuffix("_2.mp4"), result.output.lastPathComponent)
+            let out = try await probe(result.output)
+            XCTAssertEqual(out.videoStream?.codecName, "h264")
+            try FileManager.default.removeItem(at: plan.output)
+            try FileManager.default.removeItem(at: result.output)
+        }
+        // 没有留下临时文件。
+        let left = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        XCTAssertEqual(left, ["src.mp4"])
+    }
+
     // MARK: - 取消
 
     func testCancelRemovesPartialOutput() async throws {
