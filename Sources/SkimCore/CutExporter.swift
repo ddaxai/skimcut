@@ -70,7 +70,7 @@ public struct CutExporter: Sendable {
 
     public func plan(
         source: URL, info: MediaInfo, range: CutRange, options: CutOptions,
-        exists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
+        exists: @Sendable (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
     ) async throws -> CutPlan {
         guard let video = info.videoStream else { throw CutError.noVideoStream }
         let frame = 1 / max(video.frameRate ?? 30, 1)

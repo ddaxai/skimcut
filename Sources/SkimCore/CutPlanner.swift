@@ -69,6 +69,8 @@ public enum CutPlanner {
     /// 精确模式 VideoToolbox 的质量参数（AGENTS.md 第 7 节）。
     public static let videoToolboxQuality = "65"
     public static let audioBitrate = "192k"
+    /// 精确模式 `-ss` 往前让的时间（秒）。
+    public static let preciseSeekLead = 0.0005
 
     // MARK: - 校验
 
@@ -163,7 +165,10 @@ public enum CutPlanner {
         let tenBit = isTenBit(video)
 
         var args = ["-hide_banner", "-nostdin", "-n"] + FFmpegProgress.arguments
-        args += ["-ss", seconds(range.start), "-i", input.path, "-t", seconds(range.duration)]
+        // ffmpeg 精确 seek 会丢掉时间早于 -ss 的帧。帧时间（例如 29.97 fps 的 1001/30000 × n）写成 6 位小数后
+        // 可能比真实值大一点点，起点那一帧就被丢掉了；往前让 0.5 毫秒（远小于半帧），保证从起点那一帧开始。
+        let seek = max(0, range.start - preciseSeekLead)
+        args += ["-ss", seconds(seek), "-i", input.path, "-t", seconds(range.duration)]
         args += ["-map", "0:v:0", "-map", "0:a?"]
         args += videoEncoderArguments(codec: codec, tenBit: tenBit, encoder: encoder)
         args += colorArguments(video)

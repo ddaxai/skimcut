@@ -14,12 +14,19 @@ struct SkimCutApp: App {
     var body: some Scene {
         Window("SkimCut", id: "main") {
             ContentView(model: model)
-                .frame(minWidth: 720, minHeight: 480)
+                .frame(minWidth: 960, minHeight: 600)
         }
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("打开…") { model.presentOpenPanel() }
                     .keyboardShortcut("o", modifiers: .command)
+                Button("导出选区") {
+                    if let player = model.player, let cut = model.cut {
+                        model.exportCuts(source: cut.source, ranges: [player.selectedRange], mode: cut.mode)
+                    }
+                }
+                .keyboardShortcut("e", modifiers: .command)
+                .disabled(model.player == nil)
                 Button("关闭视频") { model.closeVideo() }
                     .keyboardShortcut("w", modifiers: [.command, .shift])
                     .disabled(model.player == nil)

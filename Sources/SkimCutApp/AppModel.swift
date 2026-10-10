@@ -17,6 +17,10 @@ final class AppModel {
 
     /// 当前打开的视频。
     private(set) var player: PlayerController?
+    /// 当前视频的剪切面板状态。
+    private(set) var cut: CutController?
+    /// 导出记录（任务的进度和状态来自 `jobs`）。
+    private(set) var exports: [ExportRecord] = []
     private(set) var loadState: LoadState = .idle
     /// 任务队列里的全部任务（用于显示进度）。
     private(set) var jobs: [JobSnapshot] = []
@@ -78,6 +82,7 @@ final class AppModel {
             }
         }
         player = nil
+        cut = nil
         loadState = .idle
     }
 
@@ -203,6 +208,7 @@ final class AppModel {
         player = PlayerController(
             sourceURL: source, playbackURL: playback, strategy: strategy,
             inspection: inspection, backingScale: scale)
+        cut = CutController(source: source)
         loadState = .idle
         openTask = nil
     }
@@ -211,6 +217,69 @@ final class AppModel {
     var loadingProgress: Double? {
         guard case .loading(_, _, let jobID?) = loadState else { return nil }
         return jobs.first { $0.id == jobID }?.progress
+    }
+
+    // MARK: - 剪切导出
+
+    /// 把每个区间分别导出成一个新文件（进入任务队列，可以取消）。原文件永远不变。
+    func exportCuts(source: URL, ranges: [CutRange], mode: CutMode) {
+        for range in ranges {
+            let options = AppSettings.cutOptions(mode: mode)
+            let title = "剪切 \(source.lastPathComponent)  \(Timecode.format(range.start)) – \(Timecode.format(range.end))（\(mode.displayName)）"
+            let exporter = CutExporter()
+            let queue = self.queue
+            Task { @MainActor [weak self] in
+                let id = await queue.enqueue(title: title) { [weak self] context in
+                    let model = self
+                    let info = try await MediaInfo.probe(source)
+                    let plan = try await exporter.plan(source: source, info: info, range: range, options: options)
+                    await model?.exportPlanned(id: context.id, output: plan.output, note: plan.leadInMessage)
+                    _ = try await exporter.export(plan) { progress in
+                        context.report(progress: progress)
+                    }
+                }
+                guard let self else { return }
+                if let index = self.exports.firstIndex(where: { $0.id == id }) {
+                    self.exports[index].title = title
+                } else {
+                    self.exports.append(ExportRecord(id: id, title: title))
+                }
+            }
+        }
+    }
+
+    private func exportPlanned(id: JobID, output: URL, note: String?) {
+        if let index = exports.firstIndex(where: { $0.id == id }) {
+            exports[index].output = output
+            exports[index].note = note
+        } else {
+            // 任务开始得比记录加进列表还快。
+            var record = ExportRecord(id: id, title: output.lastPathComponent)
+            record.output = output
+            record.note = note
+            exports.append(record)
+        }
+    }
+
+    func cancelJob(_ id: JobID) {
+        let queue = self.queue
+        Task { await queue.cancel(id) }
+    }
+
+    /// 去掉已经结束的导出记录。
+    func clearFinishedExports() {
+        let finished = Set(jobs.filter { $0.status.isFinished }.map(\.id))
+        exports.removeAll { finished.contains($0.id) }
+        let queue = self.queue
+        Task { await queue.removeFinished() }
+    }
+
+    func job(_ id: JobID) -> JobSnapshot? {
+        jobs.first { $0.id == id }
+    }
+
+    static func revealInFinder(_ url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     // MARK: - 外部工具
@@ -227,5 +296,20 @@ final class AppModel {
     static func copyToPasteboard(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+/// 一次导出（剪切）。进度和状态从任务队列读。
+struct ExportRecord: Identifiable, Equatable {
+    let id: JobID
+    var title: String
+    /// 规划完成后才知道。
+    var output: URL?
+    /// 例如快速模式的“实际起点会提前 …”。
+    var note: String?
+
+    init(id: JobID, title: String) {
+        self.id = id
+        self.title = title
     }
 }
