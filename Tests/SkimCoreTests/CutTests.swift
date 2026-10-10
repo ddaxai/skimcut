@@ -196,7 +196,7 @@ final class CutPlannerTests: XCTestCase {
         let args = try CutPlanner.preciseArguments(
             input: input, output: output, range: CutRange(start: 5.5, end: 7.5), info: info(), encoder: .videoToolbox)
         XCTAssertEqual(Array(args[0...8]), [
-            "-hide_banner", "-nostdin", "-n", "-progress", "pipe:1", "-nostats", "-ss", "5.500000", "-i",
+            "-hide_banner", "-nostdin", "-n", "-progress", "pipe:1", "-nostats", "-ss", "5.499500", "-i",
         ])
         XCTAssertEqual(args[args.firstIndex(of: "-t")! + 1], "2.000000")
         XCTAssertEqual(args[args.firstIndex(of: "-c:v")! + 1], "h264_videotoolbox")

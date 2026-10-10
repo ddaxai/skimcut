@@ -6,13 +6,19 @@ struct ContentView: View {
     @State private var isDropTargeted = false
 
     var body: some View {
-        ZStack {
-            if let player = model.player {
-                PlayerScreen(player: player)
-            } else {
-                EmptyStateView(model: model)
+        VStack(spacing: 0) {
+            ZStack {
+                if let player = model.player {
+                    PlayerScreen(player: player, cut: model.cut, model: model)
+                } else {
+                    EmptyStateView(model: model)
+                }
+                LoadStateOverlay(model: model)
             }
-            LoadStateOverlay(model: model)
+            if !model.exports.isEmpty {
+                Divider()
+                ExportsView(model: model)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
@@ -41,6 +47,8 @@ struct ContentView: View {
 
 struct PlayerScreen: View {
     let player: PlayerController
+    let cut: CutController?
+    let model: AppModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -49,6 +57,9 @@ struct PlayerScreen: View {
             TransportBar(player: player)
             TimelineStrip(controller: player)
                 .frame(height: TimelineMetrics.totalHeight)
+            if let cut {
+                CutPanel(player: player, cut: cut, model: model)
+            }
         }
         .background(Color.black)
     }
