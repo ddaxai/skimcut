@@ -255,6 +255,7 @@ struct Cut: AsyncParsableCommand {
         if let dates = result.recordingDates, let keys = dates.keysCreationDate ?? dates.createDate {
             print("录制时间：\(keys.exifToolString)")
         }
+        if result.output != plan.output { print("输出（原名字被占用，改为）：\(result.output.path)") }
         print("完成")
     }
 }

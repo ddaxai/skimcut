@@ -50,7 +50,8 @@ public struct CutPlan: Sendable, Equatable {
 
 public struct CutResult: Sendable, Equatable {
     public var plan: CutPlan
-    public var output: URL { plan.output }
+    /// 最终的输出文件。通常就是 `plan.output`；规划之后这个名字被别的文件占用时，会顺延成下一个序号。
+    public var output: URL
     /// 写入后的录制时间（复制了元数据时）。
     public var recordingDates: RecordingDates?
 }
@@ -105,32 +106,67 @@ public struct CutExporter: Sendable {
     }
 
     /// 执行计划。`progress` 是 0…1。
+    ///
+    /// ffmpeg 和 ExifTool 都只写同一目录里的临时文件（`.名字.skimcut-随机.扩展名`），全部成功后才用
+    /// 不覆盖的方式改名成正式文件名。这样即使规划之后有别的程序占用了这个名字，也绝不会删除或修改那个文件；
+    /// 取消或失败时只删除自己的临时文件。
     public func export(_ plan: CutPlan, progress: (@Sendable (Double?) -> Void)? = nil) async throws -> CutResult {
-        let command = try locator.command(.ffmpeg, plan.arguments)
+        let temp = Self.temporaryURL(for: plan.output)
+        var arguments = plan.arguments
+        precondition(arguments.last == plan.output.path, "输出路径必须是 ffmpeg 的最后一个参数")
+        arguments[arguments.count - 1] = temp.path
+
+        let command = try locator.command(.ffmpeg, arguments)
         let total = plan.outputDuration
         let parser = LockedParser()
-        _ = try await runner.run(command, partialOutputs: [plan.output], onStdoutLine: { line in
+        _ = try await runner.run(command, partialOutputs: [temp], onStdoutLine: { line in
             if let snapshot = parser.consume(line), let progress {
                 // 元数据还没写：最多报到 99%。
                 progress(snapshot.fraction(totalDuration: total).map { min($0, 0.99) })
             }
         })
 
-        var dates: RecordingDates?
-        if plan.copiesMetadata {
-            do {
+        do {
+            var dates: RecordingDates?
+            if plan.copiesMetadata {
                 try Task.checkCancellation()
                 let shift = plan.options.shiftRecordingDate ? plan.actualStart : nil
                 dates = try await MetadataCopier(runner: runner, locator: locator)
-                    .copy(from: plan.source, to: plan.output, shiftDatesBy: shift)
+                    .copy(from: plan.source, to: temp, shiftDatesBy: shift)
+            }
+            try Task.checkCancellation()
+            let final = try Self.moveWithoutOverwriting(temp, to: plan.output)
+            progress?(1)
+            return CutResult(plan: plan, output: final, recordingDates: dates)
+        } catch {
+            // 元数据没写好的文件不算完成；只删除自己的临时文件。
+            try? FileManager.default.removeItem(at: temp)
+            throw error
+        }
+    }
+
+    /// 和输出在同一目录（同一个卷，改名是原子的）的隐藏临时文件，扩展名不变（ffmpeg 靠它选格式）。
+    static func temporaryURL(for output: URL) -> URL {
+        let base = output.deletingPathExtension().lastPathComponent
+        let name = ".\(base).skimcut-\(UUID().uuidString.prefix(8)).\(output.pathExtension)"
+        return output.deletingLastPathComponent().appendingPathComponent(name)
+    }
+
+    /// 改名成 `destination`；已经有同名文件时顺延到 `_2`、`_3`……，绝不覆盖。
+    static func moveWithoutOverwriting(_ source: URL, to destination: URL) throws -> URL {
+        let fm = FileManager.default
+        var target = OutputNaming.uniqueURL(destination)
+        for _ in 0..<100 {
+            do {
+                // moveItem 在目标已存在时失败，不会覆盖。
+                try fm.moveItem(at: source, to: target)
+                return target
             } catch {
-                // 元数据没写好的文件不算完成。
-                try? FileManager.default.removeItem(at: plan.output)
-                throw error
+                guard fm.fileExists(atPath: target.path) else { throw error }
+                target = OutputNaming.uniqueURL(destination)
             }
         }
-        progress?(1)
-        return CutResult(plan: plan, recordingDates: dates)
+        throw CocoaError(.fileWriteFileExists)
     }
 }
 

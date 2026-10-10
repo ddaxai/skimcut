@@ -234,8 +234,12 @@ final class AppModel {
                     let info = try await MediaInfo.probe(source)
                     let plan = try await exporter.plan(source: source, info: info, range: range, options: options)
                     await model?.exportPlanned(id: context.id, output: plan.output, note: plan.leadInMessage)
-                    _ = try await exporter.export(plan) { progress in
+                    let result = try await exporter.export(plan) { progress in
                         context.report(progress: progress)
+                    }
+                    if result.output != plan.output {
+                        // 规划之后原来的名字被占用了，顺延成了下一个序号。
+                        await model?.exportPlanned(id: context.id, output: result.output, note: plan.leadInMessage)
                     }
                 }
                 guard let self else { return }
