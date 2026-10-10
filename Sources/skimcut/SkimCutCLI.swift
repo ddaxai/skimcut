@@ -8,7 +8,7 @@ struct SkimCutCLI: AsyncParsableCommand {
         commandName: "skimcut",
         abstract: "SkimCut 命令行工具：提供 SkimCore 的全部功能。",
         version: SkimCoreInfo.version,
-        subcommands: [Tools.self, Probe.self, Preview.self]
+        subcommands: [Tools.self, Probe.self, Preview.self, KeyframesCommand.self, Cut.self]
     )
 }
 
@@ -151,4 +151,118 @@ private final class LastPercent: @unchecked Sendable {
         value = new
         return true
     }
+}
+
+/// `skimcut keyframes <文件> --around 83.5`：列出某个时间附近的关键帧。
+struct KeyframesCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "keyframes", abstract: "列出某个时间附近（往前 15 秒、共 20 秒）的关键帧。")
+
+    @Argument(help: "视频文件。", transform: { URL(fileURLWithPath: $0) })
+    var file: URL
+
+    @Option(help: "时间，例如 83.456、1:23.456、00:01:23.456。", transform: parseTime)
+    var around: Double = 0
+
+    func run() async throws {
+        let info = try await MediaInfo.probe(file)
+        let command = try ToolLocator.shared.command(
+            .ffprobe, Keyframes.arguments(for: file, around: around, startTime: info.startTime))
+        let frames = Keyframes.parse(try await ToolRunner().output(command), startTime: info.startTime)
+        for t in frames { print(Timecode.format(t)) }
+        if let k = Keyframes.keyframe(atOrBefore: around, in: frames) {
+            print("不晚于 \(Timecode.format(around)) 的最近关键帧：\(Timecode.format(k))")
+        }
+    }
+}
+
+/// `skimcut cut <文件> --start 1:23.456 --end 1:35.456 --mode precise`
+struct Cut: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "把一段剪出来另存为新文件（原文件不变）。")
+
+    enum ModeOption: String, ExpressibleByArgument, CaseIterable { case fast, precise }
+    enum EncoderOption: String, ExpressibleByArgument, CaseIterable { case videotoolbox, software, lossless }
+
+    @Argument(help: "视频文件。", transform: { URL(fileURLWithPath: $0) })
+    var file: URL
+
+    @Option(help: "起点，例如 83.456、1:23.456、00:01:23.456。", transform: parseTime)
+    var start: Double
+
+    @Option(help: "终点。和 --duration 二选一。", transform: parseTime)
+    var end: Double?
+
+    @Option(help: "时长。和 --end 二选一。", transform: parseTime)
+    var duration: Double?
+
+    @Option(help: "fast：-c copy（起点提前到关键帧）；precise：重新编码，精确到帧。")
+    var mode: ModeOption = .precise
+
+    @Option(help: "精确模式的编码器：videotoolbox（macOS 默认）、software、lossless（测试用）。")
+    var encoder: EncoderOption?
+
+    @Option(name: .customLong("output-dir"), help: "输出目录，默认放在原文件旁边。", transform: { URL(fileURLWithPath: $0) })
+    var outputDirectory: URL?
+
+    @Flag(name: .customLong("no-metadata"), help: "不从原文件复制元数据。")
+    var noMetadata = false
+
+    @Flag(name: .customLong("no-shift-date"), help: "录制时间不加上剪切起点。")
+    var noShiftDate = false
+
+    @Flag(name: .customLong("dry-run"), help: "只显示计划和 ffmpeg 命令，不执行。")
+    var dryRun = false
+
+    func validate() throws {
+        guard (end == nil) != (duration == nil) else {
+            throw ValidationError("--end 和 --duration 必须且只能给一个。")
+        }
+    }
+
+    func run() async throws {
+        let cutEncoder: CutEncoder
+        switch encoder {
+        case nil: cutEncoder = .platformDefault
+        case .videotoolbox: cutEncoder = .videoToolbox
+        case .software: cutEncoder = .software(lossless: false)
+        case .lossless: cutEncoder = .software(lossless: true)
+        }
+        let range = CutRange(start: start, end: end ?? (start + (duration ?? 0)))
+        let options = CutOptions(
+            mode: mode == .fast ? .fast : .precise, outputDirectory: outputDirectory,
+            copyMetadata: !noMetadata, shiftRecordingDate: !noShiftDate)
+        let exporter = CutExporter(encoder: cutEncoder)
+        let info = try await MediaInfo.probe(file)
+        let plan = try await exporter.plan(source: file, info: info, range: range, options: options)
+
+        print("区间：\(Timecode.format(plan.range.start)) – \(Timecode.format(plan.range.end))（\(options.mode.displayName)）")
+        if let message = plan.leadInMessage { print(message) }
+        if let description = plan.encoderDescription { print(description) }
+        for warning in plan.warnings { print("注意：\(warning)") }
+        print("输出：\(plan.output.path)")
+        if dryRun {
+            let ffmpeg = try ToolLocator.shared.command(.ffmpeg, plan.arguments)
+            print(ffmpeg.displayString)
+            return
+        }
+        let last = LastPercent()
+        let result = try await exporter.export(plan) { p in
+            if let p, last.update(Int(p * 100)) {
+                FileHandle.standardError.write(Data("\r进度 \(Int(p * 100))%".utf8))
+            }
+        }
+        FileHandle.standardError.write(Data("\n".utf8))
+        if let dates = result.recordingDates, let keys = dates.keysCreationDate ?? dates.createDate {
+            print("录制时间：\(keys.exifToolString)")
+        }
+        print("完成")
+    }
+}
+
+/// 解析命令行里的时间。
+private func parseTime(_ text: String) throws -> Double {
+    guard let t = Timecode.parse(text) else {
+        throw ValidationError("无法识别的时间：\(text)（例如 83.456、1:23.456、00:01:23.456）")
+    }
+    return t
 }
