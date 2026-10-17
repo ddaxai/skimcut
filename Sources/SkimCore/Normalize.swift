@@ -70,7 +70,7 @@ public struct VolumeDuck: Sendable, Equatable, Hashable, Codable {
     }
 }
 
-public struct NormalizeOptions: Sendable, Equatable, Codable {
+public struct NormalizeOptions: Sendable, Hashable, Codable {
     /// 目标响度（LUFS）。
     public var targetLoudness: Double
     /// 真峰值上限（dBTP）。

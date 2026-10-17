@@ -2,7 +2,7 @@ import AppKit
 import SkimCore
 import SwiftUI
 
-/// 设置项的键和读取方法。播放和剪切相关的设置；其余的在 M6 加入。
+/// 设置项的键和读取方法。播放、剪切、字幕、音量相关的设置；其余的在 M6 加入。
 enum AppSettings {
     static let skimmingEnabledKey = "skimmingEnabled"
     static let skimDwellMillisecondsKey = "skimDwellMilliseconds"
@@ -12,6 +12,11 @@ enum AppSettings {
     static let outputDirectoryKey = "outputDirectoryPath"
     static let shiftRecordingDateKey = "shiftRecordingDate"
     static let defaultSubtitleLanguageKey = "defaultSubtitleLanguage"
+    static let autoDetectLoudnessKey = "autoDetectLoudness"
+    static let targetLoudnessKey = "targetLoudness"
+    static let truePeakKey = "truePeak"
+    static let loudnessPresetKey = "loudnessPreset"
+    static let burstMarginKey = "burstMargin"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -22,7 +27,32 @@ enum AppSettings {
             outputDirectoryKey: "",
             shiftRecordingDateKey: true,
             defaultSubtitleLanguageKey: SubtitleLanguages.defaultCode,
+            autoDetectLoudnessKey: true,
+            targetLoudnessKey: NormalizeOptions.defaultTarget,
+            truePeakKey: NormalizeOptions.defaultTruePeak,
+            loudnessPresetKey: LoudnessPreset.unify.rawValue,
+            burstMarginKey: LoudnessBursts.defaultMargin,
         ])
+    }
+
+    /// 打开视频时在后台检测一次响度。
+    static var autoDetectLoudness: Bool {
+        UserDefaults.standard.bool(forKey: autoDetectLoudnessKey)
+    }
+
+    /// 新打开的视频和批量窗口使用的默认音量选项（局部压低和修复选项每次重新选）。
+    static var defaultNormalizeOptions: NormalizeOptions {
+        let d = UserDefaults.standard
+        return NormalizeOptions(
+            targetLoudness: d.double(forKey: targetLoudnessKey),
+            truePeak: d.double(forKey: truePeakKey),
+            preset: LoudnessPreset(rawValue: d.string(forKey: loudnessPresetKey) ?? "") ?? .unify)
+    }
+
+    /// 爆音阈值：短时响度超过“整体响度 + 这么多 LU”。
+    static var burstMargin: Double {
+        let v = UserDefaults.standard.double(forKey: burstMarginKey)
+        return v > 0 ? v : LoudnessBursts.defaultMargin
     }
 
     static var defaultCutMode: CutMode {
@@ -75,6 +105,12 @@ struct SettingsView: View {
     @AppStorage(AppSettings.outputDirectoryKey) private var outputDirectory = ""
     @AppStorage(AppSettings.shiftRecordingDateKey) private var shiftRecordingDate = true
     @AppStorage(AppSettings.defaultSubtitleLanguageKey) private var defaultSubtitleLanguage = SubtitleLanguages.defaultCode
+    @AppStorage(AppSettings.autoDetectLoudnessKey) private var autoDetectLoudness = true
+    @AppStorage(AppSettings.targetLoudnessKey) private var targetLoudness = NormalizeOptions.defaultTarget
+    @AppStorage(AppSettings.truePeakKey) private var truePeak = NormalizeOptions.defaultTruePeak
+    @AppStorage(AppSettings.loudnessPresetKey) private var loudnessPreset = LoudnessPreset.unify.rawValue
+    @AppStorage(AppSettings.burstMarginKey) private var burstMargin = LoudnessBursts.defaultMargin
+    @State private var cacheCleared = false
 
     var body: some View {
         Form {
@@ -110,6 +146,30 @@ struct SettingsView: View {
                     ForEach(SubtitleLanguages.common, id: \.code) { item in
                         Text("\(item.name)（\(item.code)）").tag(item.code)
                     }
+                }
+            }
+            Section("音量") {
+                Toggle("打开视频时在后台检测响度", isOn: $autoDetectLoudness)
+                Stepper(value: $targetLoudness, in: -30...(-10), step: 0.5) {
+                    Text("默认目标响度 \(targetLoudness.formatted(.number.precision(.fractionLength(0...1)))) LUFS")
+                }
+                Stepper(value: $truePeak, in: -6...0, step: 0.5) {
+                    Text("默认真峰值上限 \(truePeak.formatted(.number.precision(.fractionLength(0...1)))) dBTP")
+                }
+                Picker("默认强度", selection: $loudnessPreset) {
+                    ForEach(LoudnessPreset.allCases, id: \.rawValue) { preset in
+                        Text(preset.displayName).tag(preset.rawValue)
+                    }
+                }
+                Stepper(value: $burstMargin, in: 3...30, step: 1) {
+                    Text("爆音：比整体响度高 \(Int(burstMargin)) LU 以上")
+                }
+                LabeledContent("检测结果缓存") {
+                    Button(cacheCleared ? "已清除" : "清除") {
+                        LoudnessCache.shared.removeAll()
+                        cacheCleared = true
+                    }
+                    .disabled(cacheCleared)
                 }
             }
             Section("键盘") {

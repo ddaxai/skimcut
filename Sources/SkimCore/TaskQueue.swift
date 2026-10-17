@@ -20,6 +20,18 @@ public enum JobStatus: Sendable, Equatable {
         case .succeeded, .failed, .cancelled: return true
         }
     }
+
+    /// 任务抛出错误后的状态：取消，或者带中文说明和完整日志的失败。
+    public static func outcome(for error: Error) -> JobStatus {
+        switch error {
+        case is CancellationError:
+            return .cancelled
+        case let error as ToolError:
+            return .failed(message: error.errorDescription ?? "\(error)", log: error.fullLog)
+        default:
+            return .failed(message: error.localizedDescription, log: nil)
+        }
+    }
 }
 
 public struct JobSnapshot: Sendable, Identifiable, Equatable {
@@ -149,12 +161,8 @@ public actor TaskQueue {
                 do {
                     try await work(context)
                     outcome = Task.isCancelled ? .cancelled : .succeeded
-                } catch is CancellationError {
-                    outcome = .cancelled
-                } catch let error as ToolError {
-                    outcome = .failed(message: error.errorDescription ?? "\(error)", log: error.fullLog)
                 } catch {
-                    outcome = .failed(message: error.localizedDescription, log: nil)
+                    outcome = JobStatus.outcome(for: error)
                 }
                 await self?.finish(next, outcome)
             }
