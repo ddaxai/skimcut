@@ -10,7 +10,7 @@ struct SkimCutCLI: AsyncParsableCommand {
         version: SkimCoreInfo.version,
         subcommands: [
             Tools.self, Probe.self, Preview.self, KeyframesCommand.self, Cut.self, Subs.self,
-            Loudness.self, Normalize.self, Audition.self,
+            Loudness.self, Normalize.self, Audition.self, Info.self, Dates.self, Meta.self,
         ]
     )
 }
@@ -477,6 +477,126 @@ struct Audition: AsyncParsableCommand {
         try await auditioner.render(
             file, start: at, duration: duration, options: options, stats: stats, measured: measured, output: output)
         print("输出：\(output.path)")
+    }
+}
+
+/// `skimcut info <文件>`：按组显示视频信息（ExifTool）。
+struct Info: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "按组（文件 / 视频 / 音频 / 日期 / 其他）显示视频信息，以及录制时间、标题、描述。")
+
+    @Argument(help: "视频文件。", transform: { URL(fileURLWithPath: $0) })
+    var file: URL
+
+    func run() async throws {
+        let m = try await MetadataReader.read(file)
+        print("录制时间：\(m.recordingDate.map(DateInput.display) ?? "没有")\(m.recordingDate != nil && !m.recordingDateHasTimeZone ? "（没有时区，按 UTC）" : "")")
+        print("标题：\(m.title ?? "")")
+        print("描述：\(m.description ?? "")")
+        let created = m.fileDates.creation.map { DateInput.display(.inZone($0, .current)) } ?? "读不到"
+        let modified = m.fileDates.modification.map { DateInput.display(.inZone($0, .current)) } ?? "读不到"
+        print("文件创建：\(created)　文件修改：\(modified)")
+        for section in m.sections {
+            print("\n[\(section.group.displayName)]")
+            for e in section.entries {
+                print("  \(e.family):\(e.tag) = \(e.value)")
+            }
+        }
+    }
+}
+
+/// `skimcut dates <文件…>`：修改或添加日期（会直接修改这些文件）。
+struct Dates: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "修改或添加日期（直接修改这些文件，不生成新文件）。MP4/MOV 用 ExifTool，MKV 用 mkvpropedit。",
+        discussion: """
+        例子：
+          skimcut dates a.mp4 b.mov --set "2026-10-09 14:00" --tz Asia/Shanghai
+          skimcut dates a.mp4 --set "2026-10-09 14:00" --only embedded
+          skimcut dates *.mp4 --embedded-to-file
+          skimcut dates *.mkv --file-to-embedded --tz +08:00
+        """)
+
+    enum Only: String, ExpressibleByArgument, CaseIterable { case all, embedded, file }
+
+    @Argument(help: "视频文件，可以一次给多个。", transform: { URL(fileURLWithPath: $0) })
+    var files: [URL]
+
+    @Option(help: "本地时间，例如 2026-10-09 14:00 或 2026-10-09 14:00:05。")
+    var set: String?
+
+    @Option(help: "--set 时改哪些：all（录制时间 + 文件日期）、embedded（只改录制时间）、file（只改文件日期）。")
+    var only: Only = .all
+
+    @Option(parsing: .unconditional, help: "时区，例如 Asia/Shanghai、+08:00、-05:00。默认是这台电脑的时区。")
+    var tz: String?
+
+    @Flag(name: .customLong("embedded-to-file"), help: "录制时间 → 文件的创建 / 修改日期。")
+    var embeddedToFile = false
+
+    @Flag(name: .customLong("file-to-embedded"), help: "文件日期（创建和修改中较早的一个）→ 录制时间。")
+    var fileToEmbedded = false
+
+    func validate() throws {
+        let count = [set != nil, embeddedToFile, fileToEmbedded].filter { $0 }.count
+        guard count == 1 else { throw ValidationError("--set、--embedded-to-file、--file-to-embedded 选一个。") }
+        if let tz, DateInput.parseZone(tz) == nil { throw ValidationError("无法识别的时区：\(tz)") }
+    }
+
+    func run() async throws {
+        let zone = tz.flatMap(DateInput.parseZone) ?? .current
+        let operation: DateOperation
+        if let set {
+            guard let date = DateInput.parseLocal(set, zone: zone) else {
+                throw ValidationError("无法识别的时间：\(set)（例如 2026-10-09 14:00）")
+            }
+            switch only {
+            case .all: operation = .setAll(date)
+            case .embedded: operation = .setEmbedded(date)
+            case .file: operation = .setFile(date.date)
+            }
+        } else if embeddedToFile {
+            operation = .embeddedToFile
+        } else {
+            operation = .fileToEmbedded(zone)
+        }
+        var failed = false
+        for file in files {
+            do {
+                let change = try await MetadataEditor().apply(operation, to: file)
+                var parts: [String] = []
+                if let e = change.embedded { parts.append("录制时间 \(DateInput.display(e))") }
+                if let f = change.file { parts.append("文件日期 \(DateInput.display(.inZone(f, zone)))") }
+                print("\(file.lastPathComponent)：\(parts.joined(separator: "，"))（已核对）")
+                if let note = change.note { print("  注意：\(note)") }
+            } catch {
+                print("\(file.lastPathComponent)：失败：\((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)")
+                failed = true
+            }
+        }
+        if failed { throw ExitCode(1) }
+    }
+}
+
+/// `skimcut meta <文件> --title … --description …`：修改标题和描述（会直接修改这个文件）。
+struct Meta: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "修改标题和描述（直接修改这个文件）。写空字符串表示删除。")
+
+    @Argument(help: "视频文件。", transform: { URL(fileURLWithPath: $0) })
+    var file: URL
+
+    @Option(help: "标题。")
+    var title: String?
+
+    @Option(help: "描述 / 注释。")
+    var description: String?
+
+    func validate() throws {
+        guard title != nil || description != nil else { throw ValidationError("至少给一个：--title 或 --description。") }
+    }
+
+    func run() async throws {
+        try await MetadataEditor().setText(title: title, description: description, on: file)
+        print("已写入并核对。")
     }
 }
 
