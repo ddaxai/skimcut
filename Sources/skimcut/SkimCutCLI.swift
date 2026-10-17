@@ -8,7 +8,7 @@ struct SkimCutCLI: AsyncParsableCommand {
         commandName: "skimcut",
         abstract: "SkimCut 命令行工具：提供 SkimCore 的全部功能。",
         version: SkimCoreInfo.version,
-        subcommands: [Tools.self, Probe.self, Preview.self, KeyframesCommand.self, Cut.self]
+        subcommands: [Tools.self, Probe.self, Preview.self, KeyframesCommand.self, Cut.self, Subs.self]
     )
 }
 
@@ -257,6 +257,81 @@ struct Cut: AsyncParsableCommand {
         }
         if result.output != plan.output { print("输出（原名字被占用，改为）：\(result.output.path)") }
         print("完成")
+    }
+}
+
+/// `skimcut subs <视频> --add a.srt:chi:中文 --add b.ass:eng --format mkv`
+struct Subs: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "把字幕封装进视频（软字幕，不烧录）。视频和音频不重新编码，原文件不变。")
+
+    enum FormatOption: String, ExpressibleByArgument, CaseIterable { case mp4, mkv }
+
+    @Argument(help: "视频文件。", transform: { URL(fileURLWithPath: $0) })
+    var file: URL
+
+    @Option(name: .customLong("add"), help: "字幕文件，可以写成 文件[:语言[:标题]]，例如 a.srt:chi:中文。可以重复。")
+    var add: [String] = []
+
+    @Option(help: "输出格式：mp4（文字字幕转 mov_text，ASS 样式丢失）或 mkv（保留原格式和样式）。")
+    var format: FormatOption = .mkv
+
+    @Option(name: .customLong("default"), help: "第几条字幕是默认轨道（从 1 开始，按“原有轨道 + 新加轨道”的顺序）。")
+    var defaultTrack: Int?
+
+    @Flag(name: .customLong("drop-existing"), help: "去掉源视频里已有的字幕轨道（默认保留）。")
+    var dropExisting = false
+
+    @Option(help: "同时只导出这一段（快速剪切），起点。", transform: parseTime)
+    var start: Double?
+
+    @Option(help: "同时剪切时的终点。", transform: parseTime)
+    var end: Double?
+
+    @Option(name: .customLong("output-dir"), help: "输出目录，默认放在原文件旁边。", transform: { URL(fileURLWithPath: $0) })
+    var outputDirectory: URL?
+
+    func validate() throws {
+        guard (start == nil) == (end == nil) else { throw ValidationError("--start 和 --end 要一起给。") }
+    }
+
+    func run() async throws {
+        let info = try await MediaInfo.probe(file)
+        var tracks = dropExisting ? [] : info.subtitleStreams.compactMap(SubtitleTrack.embedded)
+        for spec in add {
+            let parts = spec.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+            let url = URL(fileURLWithPath: parts[0])
+            guard let format = SubtitleFormat.detect(url) else {
+                throw ValidationError("不支持的字幕文件：\(parts[0])（支持 SRT、ASS、SSA、VTT、SUP、IDX/SUB）")
+            }
+            var track = SubtitleTrack(source: .file(url), format: format)
+            if parts.count > 1, !parts[1].isEmpty { track.language = SubtitleLanguages.normalize(parts[1]) }
+            if parts.count > 2 { track.title = parts[2] }
+            if format.isText {
+                track.charset = try await SubtitleEncoding.detect(url)
+                print("\(url.lastPathComponent)：\(SubtitleEncoding.displayName(track.charset ?? ""))")
+            }
+            tracks.append(track)
+        }
+        if let n = defaultTrack {
+            guard tracks.indices.contains(n - 1) else { throw ValidationError("--default 超出范围（共 \(tracks.count) 条）") }
+            for i in tracks.indices { tracks[i].isDefault = (i == n - 1) }
+        }
+        let container: SubtitleContainer = format == .mp4 ? .mp4 : .mkv
+        for warning in SubtitlePlanner.warnings(tracks, container: container) { print("注意：\(warning)") }
+        let range = start.map { CutRange(start: $0, end: end ?? $0) }
+        let job = SubtitleJob(source: file, tracks: tracks, container: container, range: range, outputDirectory: outputDirectory)
+        let last = LastPercent()
+        let result = try await SubtitleExporter().export(job, info: info) { p in
+            if let p, last.update(Int(p * 100)) {
+                FileHandle.standardError.write(Data("\r进度 \(Int(p * 100))%".utf8))
+            }
+        }
+        FileHandle.standardError.write(Data("\n".utf8))
+        if let k = result.actualStart, let range {
+            print(String(format: "实际起点 %@（提前 %.3f 秒），字幕已按它平移。", Timecode.format(k), range.start - k))
+        }
+        print("输出：\(result.output.path)")
     }
 }
 
