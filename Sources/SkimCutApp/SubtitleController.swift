@@ -16,6 +16,8 @@ final class SubtitleController {
     private(set) var message: String?
 
     @ObservationIgnored private var embeddedLoaded = false
+    /// 源视频本来有字幕（这时可以全部去掉，生成不带字幕的版本）。
+    private(set) var sourceHasSubtitles = false
     /// 正在检测编码的轨道。
     private(set) var detecting: Set<UUID> = []
 
@@ -26,6 +28,8 @@ final class SubtitleController {
     var allowedContainers: [SubtitleContainer] { SubtitlePlanner.allowedContainers(tracks) }
     var warnings: [String] { SubtitlePlanner.warnings(tracks, container: container) }
     var hasBitmapFile: Bool { tracks.contains { !$0.format.isText && !$0.isEmbedded } }
+    /// 原有字幕全部去掉、也没有新加：生成不带字幕的版本。
+    var removesAllSubtitles: Bool { tracks.isEmpty && sourceHasSubtitles }
 
     /// 第一次显示字幕面板时读取源视频里已有的字幕轨道（默认全部保留）。
     func loadEmbeddedTracks() async {
@@ -36,6 +40,7 @@ final class SubtitleController {
         do {
             let info = try await MediaInfo.probe(source)
             let embedded = info.subtitleStreams.compactMap(SubtitleTrack.embedded)
+            sourceHasSubtitles = !info.subtitleStreams.isEmpty
             tracks.insert(contentsOf: embedded, at: 0)
             normalizeDefault()
             fixContainer()
@@ -126,7 +131,9 @@ final class SubtitleController {
     /// 生成前的检查，返回给用户看的问题（nil 表示可以生成）。
     func problem(range: CutRange?) -> String? {
         do {
-            try SubtitlePlanner.validate(tracks, container: container, cutting: cutToSelection && range != nil)
+            try SubtitlePlanner.validate(
+                tracks, container: container, cutting: cutToSelection && range != nil,
+                sourceHasSubtitles: sourceHasSubtitles)
         } catch let error as LocalizedError {
             return error.errorDescription
         } catch {

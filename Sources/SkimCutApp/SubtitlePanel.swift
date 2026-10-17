@@ -16,9 +16,9 @@ struct SubtitlePanel: View {
                     .help("也可以把 SRT、ASS、SSA、VTT、SUP、IDX/SUB 文件直接拖进窗口")
 
                 Picker("输出", selection: $subtitles.container) {
-                    ForEach(SubtitleContainer.allCases, id: \.self) { c in
+                    // 只列出可以用的格式（有图形字幕时只有 MKV）。
+                    ForEach(subtitles.allowedContainers, id: \.self) { c in
                         Text(c.displayName).tag(c)
-                            .disabled(!subtitles.allowedContainers.contains(c))
                     }
                 }
                 .pickerStyle(.segmented)
@@ -42,6 +42,10 @@ struct SubtitlePanel: View {
 
             if subtitles.isLoadingEmbedded {
                 ProgressView().controlSize(.small)
+            } else if subtitles.removesAllSubtitles {
+                Text("原有字幕已经全部去掉：点“生成”会得到一个不带字幕的版本（原名_nosubs）。也可以再加新的字幕。")
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
             } else if subtitles.tracks.isEmpty {
                 Text("还没有字幕。把字幕文件拖进窗口，或者点“添加字幕…”。")
                     .foregroundStyle(.secondary)

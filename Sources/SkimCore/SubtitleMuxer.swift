@@ -91,17 +91,21 @@ public enum SubtitlePlanner {
         }
     }
 
-    public static func validate(_ tracks: [SubtitleTrack], container: SubtitleContainer, cutting: Bool) throws {
-        guard !tracks.isEmpty else { throw SubtitleError.noTracks }
+    /// - Parameter sourceHasSubtitles: 源视频里本来有字幕。这时允许一条都不留，生成去掉字幕的版本。
+    public static func validate(
+        _ tracks: [SubtitleTrack], container: SubtitleContainer, cutting: Bool, sourceHasSubtitles: Bool = false
+    ) throws {
+        guard !tracks.isEmpty || sourceHasSubtitles else { throw SubtitleError.noTracks }
         if container == .mp4, tracks.contains(where: { !$0.format.isText }) { throw SubtitleError.bitmapNeedsMKV }
         if cutting, tracks.contains(where: { !$0.format.isText && !$0.isEmbedded }) { throw SubtitleError.bitmapCannotBeCut }
     }
 
-    /// 输出文件名：`原名_subs.mp4`；同时剪切时 `原名_cut_01m23.456s-01m35.456s_subs.mp4`。
-    public static func outputFileName(source: URL, range: CutRange?, container: SubtitleContainer) -> String {
+    /// 输出文件名：`原名_subs.mp4`；同时剪切时 `原名_cut_01m23.456s-01m35.456s_subs.mp4`；
+    /// 一条字幕都不留时是 `原名_nosubs.mp4`。
+    public static func outputFileName(source: URL, range: CutRange?, container: SubtitleContainer, empty: Bool = false) -> String {
         let base = source.deletingPathExtension().lastPathComponent
         let cut = range.map { "_cut_\(OutputNaming.timeTag($0.start))-\(OutputNaming.timeTag($0.end))" } ?? ""
-        return "\(base)\(cut)_subs.\(container.rawValue)"
+        return "\(base)\(cut)_\(empty ? "nosubs" : "subs").\(container.rawValue)"
     }
 
     /// 第一步（只在同时剪切时）：快速剪切成临时 MKV，带上要保留的原有字幕流。
@@ -115,43 +119,52 @@ public enum SubtitlePlanner {
         return args
     }
 
-    /// 一条要放进 ffmpeg 的外部字幕输入。
-    public struct ExternalInput: Sendable, Equatable {
-        public var track: SubtitleTrack
-        /// 已经转成 UTF-8 / 平移过的文件（图形字幕就是原文件）。
-        public var file: URL
+    /// 输出里的一条字幕：来自 `base` 里的某条流，或者一个字幕文件。
+    public struct MuxTrack: Sendable, Equatable {
+        public enum Input: Sendable, Equatable {
+            /// `base` 里的流（源视频是 `0:<序号>`，临时 MKV 是 `0:s:<i>`）。
+            case base(selector: String)
+            /// 已经转成 UTF-8 / 平移过的字幕文件（图形字幕就是原文件）。
+            case file(URL)
+        }
 
-        public init(track: SubtitleTrack, file: URL) {
+        public var track: SubtitleTrack
+        public var input: Input
+
+        public init(track: SubtitleTrack, input: Input) {
             self.track = track
-            self.file = file
+            self.input = input
         }
     }
 
-    /// 第二步：视频和音频直接复制，加上字幕。
-    ///
-    /// - Parameters:
-    ///   - base: 源视频，或第一步剪出来的临时 MKV。
-    ///   - embedded: 原有字幕轨道和它们在 `base` 里的选择器（源视频是 `0:<序号>`，临时 MKV 是 `0:s:<i>`）。
-    ///   - external: 外部字幕文件，按顺序放在原有字幕后面。
+    /// 第二步：视频和音频直接复制，按 `tracks` 的顺序加上字幕（顺序就是用户在列表里排的顺序）。
+    /// `tracks` 为空时生成不带字幕的版本。
     public static func muxArguments(
-        base: URL, embedded: [(track: SubtitleTrack, selector: String)], external: [ExternalInput],
-        container: SubtitleContainer, videoCodec: String?, output: URL
+        base: URL, tracks: [MuxTrack], container: SubtitleContainer, videoCodec: String?, output: URL
     ) -> [String] {
         var args = ["-hide_banner", "-nostdin", "-n"] + FFmpegProgress.arguments
         args += ["-i", base.path]
-        for input in external {
-            // VobSub 的输入是 .idx；字幕文件都按 UTF-8 读。
-            if input.track.format.isText { args += ["-sub_charenc", "UTF-8"] }
-            args += ["-i", input.file.path]
+        var maps: [String] = []
+        var nextInput = 1
+        for item in tracks {
+            switch item.input {
+            case .base(let selector):
+                maps.append(selector)
+            case .file(let url):
+                // VobSub 的输入是 .idx；文字字幕都按 UTF-8 读。
+                if item.track.format.isText { args += ["-sub_charenc", "UTF-8"] }
+                args += ["-i", url.path]
+                maps.append("\(nextInput):0")
+                nextInput += 1
+            }
         }
         args += ["-map", "0:v:0", "-map", "0:a?"]
-        for item in embedded { args += ["-map", item.selector] }
-        for i in external.indices { args += ["-map", "\(i + 1):0"] }
+        for m in maps { args += ["-map", m] }
         args += ["-c:v", "copy", "-c:a", "copy"]
 
-        let tracks = embedded.map(\.track) + external.map(\.track)
-        let defaultIndex = tracks.firstIndex(where: \.isDefault)
-        for (n, track) in tracks.enumerated() {
+        let defaultIndex = tracks.firstIndex(where: \.track.isDefault)
+        for (n, item) in tracks.enumerated() {
+            let track = item.track
             args += ["-c:s:\(n)", outputCodec(for: track.format, container: container)]
             args += ["-metadata:s:s:\(n)", "language=\(SubtitleLanguages.normalize(track.language))"]
             let title = track.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -170,6 +183,32 @@ public enum SubtitlePlanner {
         }
         args.append(output.path)
         return args
+    }
+
+    /// 从临时 MKV 里取出一条文字字幕（已经和剪好的画面同步），之后在 Swift 里截到终点。
+    /// 返回参数和取出后的格式（mov_text 取成 SRT）。
+    public static func extractArguments(from file: URL, subtitleIndex: Int, format: SubtitleFormat, output: URL) -> [String] {
+        let (codec, muxer) = extractionCodec(for: format)
+        return ["-hide_banner", "-nostdin", "-v", "error", "-y", "-i", file.path,
+                "-map", "0:s:\(subtitleIndex)", "-c:s", codec, "-f", muxer, output.path]
+    }
+
+    /// 取出时用的编码和格式。
+    public static func extractionCodec(for format: SubtitleFormat) -> (codec: String, muxer: String) {
+        switch format {
+        case .ass, .ssa: return ("ass", "ass")
+        case .vtt: return ("webvtt", "webvtt")
+        default: return ("srt", "srt")
+        }
+    }
+
+    /// 取出后的格式。
+    public static func extractedFormat(for format: SubtitleFormat) -> SubtitleFormat {
+        switch format {
+        case .ass, .ssa: return .ass
+        case .vtt: return .vtt
+        default: return .srt
+        }
     }
 
     static func seconds(_ value: Double) -> String {
@@ -224,7 +263,9 @@ public struct SubtitleExporter: Sendable {
     public func export(
         _ job: SubtitleJob, info: MediaInfo, progress: (@Sendable (Double?) -> Void)? = nil
     ) async throws -> SubtitleResult {
-        try SubtitlePlanner.validate(job.tracks, container: job.container, cutting: job.range != nil)
+        try SubtitlePlanner.validate(
+            job.tracks, container: job.container, cutting: job.range != nil,
+            sourceHasSubtitles: !info.subtitleStreams.isEmpty)
         let range = try job.range.map { try CutPlanner.validate($0, duration: info.bestDuration) }
 
         let fm = FileManager.default
@@ -232,70 +273,97 @@ public struct SubtitleExporter: Sendable {
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: work) }
 
-        // 同时剪切：实际起点是起点之前最近的关键帧，字幕按它平移。
+        let embeddedIndices = job.tracks.compactMap { track -> Int? in
+            if case .embedded(let index) = track.source { return index }
+            return nil
+        }
+
+        // 第一步（同时剪切时）：快速剪切成临时 MKV。实际起点是起点之前最近的关键帧。
+        var base = job.source
         var actualStart: Double?
+        /// 字幕文件里的时间减去多少秒才是输出里的时间；输出里的终点。
+        var timing: (offset: Double, end: Double)?
+        let twoSteps = range != nil
+        var outputDuration = info.bestDuration
         if let range {
             let k = try await Keyframes.keyframe(
                 atOrBefore: range.start, in: job.source, startTime: info.startTime, runner: runner, locator: locator)
-            actualStart = CutPlanner.fastActualStart(requested: range.start, keyframeAtOrBefore: k)
-        }
-
-        // 外部字幕：转成 UTF-8，需要时平移。
-        var external: [SubtitlePlanner.ExternalInput] = []
-        for (i, track) in job.tracks.enumerated() {
-            guard case .file(let url) = track.source else { continue }
-            try Task.checkCancellation()
-            guard track.format.isText else {
-                external.append(.init(track: track, file: url))
-                continue
-            }
-            let charset: String
-            if let known = track.charset {
-                charset = known
-            } else {
-                charset = try await SubtitleEncoding.detect(url, runner: runner, locator: locator)
-            }
-            // uchardet 没认出来、内容也不是合法的 UTF-8：不猜，直接告诉用户。
-            if SubtitleEncoding.isUnknown(charset), String(data: try Data(contentsOf: url), encoding: .utf8) == nil {
-                throw SubtitleError.unknownEncoding(url.lastPathComponent)
-            }
-            var text = try await SubtitleEncoding.readUTF8(url, charset: charset, runner: runner, locator: locator)
-            if let range, let start = actualStart {
-                text = SubtitleShifter.shift(text, format: track.format, by: start, duration: range.end - start)
-            }
-            let ext = track.format == .vtt ? "vtt" : track.format.rawValue
-            let prepared = work.appendingPathComponent("track\(i).\(ext)")
-            try Data(text.utf8).write(to: prepared)
-            external.append(.init(track: track, file: prepared))
-        }
-
-        // 第一步（同时剪切时）：快速剪切成临时 MKV。
-        let embeddedTracks = job.tracks.compactMap { track -> (SubtitleTrack, Int)? in
-            if case .embedded(let index) = track.source { return (track, index) }
-            return nil
-        }
-        var base = job.source
-        var embedded: [(track: SubtitleTrack, selector: String)] = embeddedTracks.map { ($0.0, "0:\($0.1)") }
-        let outputDuration = range.map { $0.end - (actualStart ?? $0.start) } ?? info.bestDuration
-        let twoSteps = range != nil
-        if let range {
+            let start = CutPlanner.fastActualStart(requested: range.start, keyframeAtOrBefore: k)
+            actualStart = start
+            outputDuration = range.end - start
             let cut = work.appendingPathComponent("cut.mkv")
             let args = SubtitlePlanner.cutArguments(
-                source: job.source, range: range, embeddedStreams: embeddedTracks.map(\.1), output: cut)
+                source: job.source, range: range, embeddedStreams: embeddedIndices, output: cut)
             try await runFFmpeg(args, partial: cut, total: outputDuration) { p in
                 progress?(p.map { $0 * 0.5 })
             }
             base = cut
-            embedded = embeddedTracks.enumerated().map { ($0.element.0, "0:s:\($0.offset)") }
+            // 剪出来的文件里，第一帧视频不一定在 0 秒（有 B 帧时常见 0.05–0.08 秒）。字幕要对齐画面：
+            // 字幕文件里的时间（播放器按相对文件开头的时间显示）减去实际起点，再加上第一帧视频的时间 v0。
+            let cutInfo = try await MediaInfo.probe(cut, runner: runner, locator: locator)
+            let v0 = cutInfo.videoStream?.startTime ?? 0
+            timing = (offset: start - v0, end: range.end - start + v0)
+        }
+
+        // 每条轨道准备好输入（顺序就是列表的顺序）。
+        var muxTracks: [SubtitlePlanner.MuxTrack] = []
+        var embeddedPosition = 0
+        for (i, track) in job.tracks.enumerated() {
+            try Task.checkCancellation()
+            switch track.source {
+            case .embedded(let index):
+                defer { embeddedPosition += 1 }
+                guard let timing, track.format.isText else {
+                    // 不剪切：直接从源视频复制。剪切时的图形字幕：跟着第一步复制（不能截尾）。
+                    let selector = twoSteps ? "0:s:\(embeddedPosition)" : "0:\(index)"
+                    muxTracks.append(.init(track: track, input: .base(selector: selector)))
+                    continue
+                }
+                // 剪切时的原有文字字幕：从临时 MKV 取出来（已经和画面同步），再和外部字幕一样截到终点。
+                let format = SubtitlePlanner.extractedFormat(for: track.format)
+                let extracted = work.appendingPathComponent("embedded\(i).\(format == .vtt ? "vtt" : format.rawValue)")
+                _ = try await runner.run(try locator.command(.ffmpeg, SubtitlePlanner.extractArguments(
+                    from: base, subtitleIndex: embeddedPosition, format: track.format, output: extracted)))
+                let text = SubtitleShifter.shift(
+                    String(decoding: try Data(contentsOf: extracted), as: UTF8.self),
+                    format: format, by: 0, duration: timing.end)
+                try Data(text.utf8).write(to: extracted)
+                var converted = track
+                converted.format = format
+                muxTracks.append(.init(track: converted, input: .file(extracted)))
+            case .file(let url):
+                guard track.format.isText else {
+                    muxTracks.append(.init(track: track, input: .file(url)))
+                    continue
+                }
+                let charset: String
+                if let known = track.charset {
+                    charset = known
+                } else {
+                    charset = try await SubtitleEncoding.detect(url, runner: runner, locator: locator)
+                }
+                // uchardet 没认出来、内容也不是合法的 UTF-8：不猜，直接告诉用户。
+                if SubtitleEncoding.isUnknown(charset), String(data: try Data(contentsOf: url), encoding: .utf8) == nil {
+                    throw SubtitleError.unknownEncoding(url.lastPathComponent)
+                }
+                var text = try await SubtitleEncoding.readUTF8(url, charset: charset, runner: runner, locator: locator)
+                if let timing {
+                    text = SubtitleShifter.shift(text, format: track.format, by: timing.offset, duration: timing.end)
+                }
+                let ext = track.format == .vtt ? "vtt" : track.format.rawValue
+                let prepared = work.appendingPathComponent("track\(i).\(ext)")
+                try Data(text.utf8).write(to: prepared)
+                muxTracks.append(.init(track: track, input: .file(prepared)))
+            }
         }
 
         // 第二步：封装字幕，写进输出目录里的临时文件。
         let directory = job.outputDirectory ?? job.source.deletingLastPathComponent()
-        let output = OutputNaming.uniqueURL(directory.appendingPathComponent(
-            SubtitlePlanner.outputFileName(source: job.source, range: range, container: job.container)))
+        let output = OutputNaming.uniqueURL(directory.appendingPathComponent(SubtitlePlanner.outputFileName(
+            source: job.source, range: range, container: job.container, empty: job.tracks.isEmpty)))
         let temp = CutExporter.temporaryURL(for: output)
         let args = SubtitlePlanner.muxArguments(
-            base: base, embedded: embedded, external: external, container: job.container,
+            base: base, tracks: muxTracks, container: job.container,
             videoCodec: info.videoStream?.codecName, output: temp)
         try await runFFmpeg(args, partial: temp, total: outputDuration) { p in
             progress?(p.map { twoSteps ? 0.5 + $0 * 0.49 : min($0, 0.99) })
