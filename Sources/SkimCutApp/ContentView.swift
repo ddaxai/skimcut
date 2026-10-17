@@ -47,7 +47,7 @@ struct ContentView: View {
     private func openBatchWindowIfRequested() {
         guard model.pendingBatchWindow else { return }
         model.pendingBatchWindow = false
-        openWindow(id: BatchVolumeView.windowID)
+        openWindow(id: BatchWindow.windowID)
     }
 }
 
@@ -106,6 +106,10 @@ struct BottomPanelSwitcher: View {
             case .volume:
                 if let volume = model.volume {
                     VolumePanel(player: player, volume: volume, model: model)
+                }
+            case .info:
+                if let info = model.info {
+                    InfoPanel(info: info, model: model)
                 }
             }
         }

@@ -6,7 +6,6 @@ struct VolumePanel: View {
     let player: PlayerController
     @Bindable var volume: VolumeController
     let model: AppModel
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -63,7 +62,7 @@ struct VolumePanel: View {
                 Button("重试") { volume.detect() }
             }
             Spacer(minLength: 8)
-            Button("批量统一音量…") { openWindow(id: BatchVolumeView.windowID) }
+            Button("批量统一音量…") { model.openBatchWindow(.volume) }
                 .help("一次拖入多个视频，统一处理成相同的音量")
         }
     }
