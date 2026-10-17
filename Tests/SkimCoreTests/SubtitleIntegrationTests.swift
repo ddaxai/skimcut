@@ -146,7 +146,7 @@ final class SubtitleIntegrationTests: XCTestCase {
         XCTAssertEqual(removedStreams.map { $0["codec"] }, ["ass"])
     }
 
-    /// 同时剪切：字幕时间减去实际起点（关键帧 4 秒），区间外的去掉，跨过终点的截断。
+    /// 同时剪切：字幕时间按实际起点（关键帧 4 秒）平移，并对齐剪出来的第一帧视频；区间外的去掉，跨过终点的截断。
     func testCutWithSubtitlesShiftsByActualStart() async throws {
         let media = try TestSupport.testMedia()
         _ = try TestSupport.requireTool(.uchardet)
@@ -160,21 +160,104 @@ final class SubtitleIntegrationTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(result.actualStart), 4, accuracy: 0.001)
         XCTAssertEqual(result.output.lastPathComponent, "h264_gop4_cut_00m05.000s-00m09.000s_subs.mkv")
 
-        // SRT：1.0–3.5 在起点之前去掉；4.0–6.0 → 0.0–2.0；7.25–9.75 → 3.25–5.0（截到终点 9 秒）。
+        // 剪出来的第一帧视频在 v0 秒（有 B 帧时不是 0）：源 4.0 秒的字幕也要从 v0 开始。
+        let out = try await probe(result.output)
+        let v0 = try XCTUnwrap(out.videoStream?.startTime)
+        func t(_ x: Double) -> String { SubtitleShifter.formatCueTime(x, .srt) }
+        // SRT：1.0–3.5 在起点之前去掉；4.0–6.0 → v0…v0+2；7.25–9.75 → v0+3.25…v0+5（截到终点 9 秒）。
         let srt = try await extractSubtitle(result.output, 0, as: "srt")
         XCTAssertFalse(srt.contains("第一条字幕"))
-        XCTAssertTrue(srt.contains("00:00:00,000 --> 00:00:02,000"), srt)
-        XCTAssertTrue(srt.contains("00:00:03,250 --> 00:00:05,000"), srt)
+        XCTAssertTrue(srt.contains("\(t(v0)) --> \(t(v0 + 2))"), srt)
+        XCTAssertTrue(srt.contains("\(t(v0 + 3.25)) --> \(t(v0 + 5))"), srt)
         // ASS 也一样平移，样式保留。
         let ass = try await extractSubtitle(result.output, 1, as: "ass")
-        XCTAssertTrue(ass.contains("0:00:00.00,0:00:02.00,Yellow"), ass)
+        XCTAssertTrue(ass.contains(",Yellow,"), ass)
         XCTAssertTrue(ass.contains("Style: Yellow"))
 
         // 视频从第 4 秒（第 120 帧）开始，没有重新编码。
         let src = try await packetHashes(source)
-        let out = try await packetHashes(result.output)
-        XCTAssertEqual(out, Array(src[120..<(120 + out.count)]))
-        XCTAssertTrue((150...153).contains(out.count), "4.0–9.0 秒是 150 帧，复制模式终点可能多带几帧：\(out.count)")
+        let hashes = try await packetHashes(result.output)
+        XCTAssertEqual(hashes, Array(src[120..<(120 + hashes.count)]))
+        XCTAssertTrue((150...153).contains(hashes.count), "4.0–9.0 秒是 150 帧，复制模式终点可能多带几帧：\(hashes.count)")
+        // 字幕不会把文件拉长（不会出现结尾定格）。
+        XCTAssertLessThanOrEqual(try XCTUnwrap(out.duration), v0 + 5.2)
+    }
+
+    /// 剪切时原有字幕和新加字幕一样截到终点，文件不会因为字幕而变长。
+    func testCutTrimsEmbeddedSubtitlesToo() async throws {
+        let media = try TestSupport.testMedia()
+        _ = try TestSupport.requireTool(.uchardet)
+        let dir = try TestSupport.makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = try await makeSourceWithEmbeddedSubtitle(media, dir)
+        let info = try await probe(source)
+        let embedded = info.subtitleStreams.compactMap(SubtitleTrack.embedded)
+        let external = SubtitleTrack(source: .file(media.appendingPathComponent("subs_gbk.srt")), format: .srt)
+        // 新加的排在原有轨道前面：输出按列表顺序。
+        let result = try await SubtitleExporter(runner: runner).export(
+            SubtitleJob(source: source, tracks: [external] + embedded, container: .mkv,
+                        range: CutRange(start: 5, end: 9), outputDirectory: dir), info: info)
+        let out = try await probe(result.output)
+        let streams = try await subtitleStreams(result.output)
+        XCTAssertEqual(streams.map { $0["language"] }, ["chi", "jpn"])
+        var lastEnds: [Double] = []
+        for n in 0..<2 {
+            let srt = try await extractSubtitle(result.output, n, as: "srt")
+            let ends = srt.split(separator: "\n").filter { $0.contains("-->") }
+                .compactMap { SubtitleShifter.parseCueTime(String($0.split(separator: " ").last ?? "")) }
+            lastEnds.append(try XCTUnwrap(ends.max()))
+        }
+        // 两条字幕（原有的和新加的）都截在同一个终点（源文件 9 秒）。
+        XCTAssertEqual(lastEnds[0], lastEnds[1], accuracy: 0.03, "\(lastEnds)")
+        // 文件不会因为字幕而变长：时长不超过视频的最后一帧太多（原来会多出约 0.65 秒的定格）。
+        let lastVideo = try await runner.output(try ToolLocator.shared.command(.ffprobe, [
+            "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time,duration_time",
+            "-of", "csv=p=0", result.output.path,
+        ])).split(whereSeparator: \.isNewline).compactMap { line -> Double? in
+            let parts = line.split(separator: ",").compactMap { Double($0) }
+            return parts.count == 2 ? parts[0] + parts[1] : nil
+        }.max()
+        XCTAssertLessThanOrEqual(try XCTUnwrap(out.duration), try XCTUnwrap(lastVideo) + 0.05, "字幕不能把文件拉长")
+        XCTAssertLessThanOrEqual(lastEnds.max() ?? 0, try XCTUnwrap(lastVideo) + 0.05)
+    }
+
+    /// 源视频本来有字幕：去掉全部字幕，生成不带字幕的版本。
+    func testRemovingAllSubtitles() async throws {
+        let media = try TestSupport.testMedia()
+        let dir = try TestSupport.makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = try await makeSourceWithEmbeddedSubtitle(media, dir)
+        let info = try await probe(source)
+        let result = try await SubtitleExporter(runner: runner).export(
+            SubtitleJob(source: source, tracks: [], container: .mp4, outputDirectory: dir), info: info)
+        XCTAssertEqual(result.output.lastPathComponent, "with subs_nosubs.mp4")
+        let out = try await probe(result.output)
+        XCTAssertTrue(out.subtitleStreams.isEmpty)
+        XCTAssertNotNil(out.videoStream)
+        XCTAssertEqual(out.audioStreams.count, 1)
+        // 源视频没有字幕时，空列表仍然报错。
+        let plain = media.appendingPathComponent("h264_gop4.mp4")
+        do {
+            _ = try await SubtitleExporter(runner: runner).export(
+                SubtitleJob(source: plain, tracks: [], container: .mp4, outputDirectory: dir), info: try await probe(plain))
+            XCTFail("应该报“没有要写入的字幕轨道”")
+        } catch let error as SubtitleError {
+            XCTAssertEqual(error, .noTracks)
+        }
+    }
+
+    /// 带一条原有字幕（日语 SRT，UTF-8）的 MKV。
+    private func makeSourceWithEmbeddedSubtitle(_ media: URL, _ dir: URL) async throws -> URL {
+        let source = dir.appendingPathComponent("with subs.mkv")
+        _ = try await runner.run(try ToolLocator.shared.command(.ffmpeg, [
+            "-hide_banner", "-nostdin", "-v", "error", "-i", media.appendingPathComponent("h264_gop4.mp4").path,
+            "-sub_charenc", "GB18030", "-i", media.appendingPathComponent("subs_gbk.srt").path,
+            // 字幕要重新编码成 UTF-8 的 SRT（-c copy 会把 GBK 的原始字节放进 MKV）。
+            "-map", "0", "-map", "1", "-c:v", "copy", "-c:a", "copy", "-c:s", "srt",
+            "-metadata:s:s:0", "language=jpn", "-metadata:s:s:0", "title=原有",
+            source.path,
+        ]))
+        return source
     }
 
     func testOutputNeverOverwrites() async throws {

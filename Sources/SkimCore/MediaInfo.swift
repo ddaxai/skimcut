@@ -30,6 +30,8 @@ public struct MediaStream: Sendable, Equatable {
     public var title: String?
     /// 是否是默认轨道（`disposition.default`）。
     public var isDefault: Bool
+    /// 这条流的起始时间（`start_time`）。
+    public var startTime: Double?
 
     public init(
         index: Int, codecType: String, codecName: String? = nil, codecTagString: String? = nil,
@@ -37,7 +39,7 @@ public struct MediaStream: Sendable, Equatable {
         frameRate: Double? = nil, duration: Double? = nil, colorTransfer: String? = nil,
         colorPrimaries: String? = nil, isAttachedPicture: Bool = false, language: String? = nil,
         colorSpace: String? = nil, colorRange: String? = nil, hasDolbyVision: Bool = false,
-        title: String? = nil, isDefault: Bool = false
+        title: String? = nil, isDefault: Bool = false, startTime: Double? = nil
     ) {
         self.index = index
         self.codecType = codecType
@@ -58,6 +60,7 @@ public struct MediaStream: Sendable, Equatable {
         self.hasDolbyVision = hasDolbyVision
         self.title = title
         self.isDefault = isDefault
+        self.startTime = startTime
     }
 
     public var isVideo: Bool { codecType == "video" && !isAttachedPicture }
@@ -172,7 +175,8 @@ public struct MediaInfo: Sendable, Equatable {
             colorRange: s["color_range"] as? String,
             hasDolbyVision: hasDolbyVision(s),
             title: (tags["title"] as? String) ?? genericHandlerFiltered(tags["handler_name"] as? String),
-            isDefault: int(disposition["default"]) == 1
+            isDefault: int(disposition["default"]) == 1,
+            startTime: number(s["start_time"])
         )
     }
 

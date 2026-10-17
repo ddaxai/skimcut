@@ -210,6 +210,8 @@ final class SubtitlePlannerTests: XCTestCase {
 
     func testValidate() {
         XCTAssertThrowsError(try SubtitlePlanner.validate([], container: .mkv, cutting: false))
+        // 源视频本来有字幕：可以一条都不留（生成去掉字幕的版本）。
+        XCTAssertNoThrow(try SubtitlePlanner.validate([], container: .mp4, cutting: true, sourceHasSubtitles: true))
         XCTAssertThrowsError(try SubtitlePlanner.validate([supTrack], container: .mp4, cutting: false)) {
             XCTAssertEqual($0 as? SubtitleError, .bitmapNeedsMKV)
         }
@@ -228,6 +230,7 @@ final class SubtitlePlannerTests: XCTestCase {
     func testFileName() {
         let src = URL(fileURLWithPath: "/m/我的 视频.mov")
         XCTAssertEqual(SubtitlePlanner.outputFileName(source: src, range: nil, container: .mp4), "我的 视频_subs.mp4")
+        XCTAssertEqual(SubtitlePlanner.outputFileName(source: src, range: nil, container: .mp4, empty: true), "我的 视频_nosubs.mp4")
         XCTAssertEqual(SubtitlePlanner.outputFileName(source: src, range: CutRange(start: 83.456, end: 95.456), container: .mkv),
                        "我的 视频_cut_01m23.456s-01m35.456s_subs.mkv")
     }
@@ -237,9 +240,10 @@ final class SubtitlePlannerTests: XCTestCase {
         let out = URL(fileURLWithPath: "/m/out.mp4")
         let embedded = SubtitleTrack(source: .embedded(streamIndex: 2), format: .movText, language: "jpn")
         let args = SubtitlePlanner.muxArguments(
-            base: base, embedded: [(embedded, "0:2")],
-            external: [.init(track: srtTrack, file: URL(fileURLWithPath: "/t/track0.srt")),
-                       .init(track: assTrack, file: URL(fileURLWithPath: "/t/track1.ass"))],
+            base: base,
+            tracks: [.init(track: embedded, input: .base(selector: "0:2")),
+                     .init(track: srtTrack, input: .file(URL(fileURLWithPath: "/t/track0.srt"))),
+                     .init(track: assTrack, input: .file(URL(fileURLWithPath: "/t/track1.ass")))],
             container: .mp4, videoCodec: "hevc", output: out)
         XCTAssertEqual(args, [
             "-hide_banner", "-nostdin", "-n", "-progress", "pipe:1", "-nostats",
@@ -256,15 +260,44 @@ final class SubtitlePlannerTests: XCTestCase {
         ])
     }
 
+    func testMuxArgumentsKeepListOrder() {
+        // 用户把新加的字幕排在原有轨道前面：输出也按这个顺序。
+        let embedded = SubtitleTrack(source: .embedded(streamIndex: 5), format: .srt)
+        let args = SubtitlePlanner.muxArguments(
+            base: URL(fileURLWithPath: "/m/a.mkv"),
+            tracks: [.init(track: srtTrack, input: .file(URL(fileURLWithPath: "/t/a.srt"))),
+                     .init(track: embedded, input: .base(selector: "0:5"))],
+            container: .mkv, videoCodec: "h264", output: URL(fileURLWithPath: "/o.mkv"))
+        let maps = args.enumerated().filter { $0.element == "-map" }.map { args[$0.offset + 1] }
+        XCTAssertEqual(maps, ["0:v:0", "0:a?", "1:0", "0:5"])
+    }
+
+    func testMuxArgumentsWithoutSubtitles() {
+        let args = SubtitlePlanner.muxArguments(
+            base: URL(fileURLWithPath: "/m/a.mkv"), tracks: [], container: .mp4, videoCodec: "h264",
+            output: URL(fileURLWithPath: "/o.mp4"))
+        XCTAssertFalse(args.contains { $0.hasPrefix("-c:s") })
+        XCTAssertEqual(args.filter { $0 == "-map" }.count, 2)
+    }
+
     func testMuxArgumentsMKVAndBitmap() {
         let args = SubtitlePlanner.muxArguments(
-            base: URL(fileURLWithPath: "/m/cut.mkv"), embedded: [],
-            external: [.init(track: supTrack, file: URL(fileURLWithPath: "/s/c.sup"))],
+            base: URL(fileURLWithPath: "/m/cut.mkv"),
+            tracks: [.init(track: supTrack, input: .file(URL(fileURLWithPath: "/s/c.sup")))],
             container: .mkv, videoCodec: "h264", output: URL(fileURLWithPath: "/o.mkv"))
         XCTAssertFalse(args.contains("-sub_charenc"), "图形字幕不设文字编码")
         XCTAssertTrue(args.contains("matroska"))
         XCTAssertFalse(args.contains("-movflags"))
         XCTAssertEqual(args[args.firstIndex(of: "-c:s:0")! + 1], "copy")
+    }
+
+    func testExtractArguments() {
+        XCTAssertEqual(SubtitlePlanner.extractArguments(
+            from: URL(fileURLWithPath: "/t/cut.mkv"), subtitleIndex: 1, format: .movText, output: URL(fileURLWithPath: "/t/e.srt")),
+            ["-hide_banner", "-nostdin", "-v", "error", "-y", "-i", "/t/cut.mkv", "-map", "0:s:1", "-c:s", "srt", "-f", "srt", "/t/e.srt"])
+        XCTAssertEqual(SubtitlePlanner.extractionCodec(for: .ssa).muxer, "ass")
+        XCTAssertEqual(SubtitlePlanner.extractedFormat(for: .movText), .srt)
+        XCTAssertEqual(SubtitlePlanner.extractedFormat(for: .vtt), .vtt)
     }
 
     func testCutArguments() {
