@@ -8,7 +8,10 @@ struct SkimCutCLI: AsyncParsableCommand {
         commandName: "skimcut",
         abstract: "SkimCut 命令行工具：提供 SkimCore 的全部功能。",
         version: SkimCoreInfo.version,
-        subcommands: [Tools.self, Probe.self, Preview.self, KeyframesCommand.self, Cut.self, Subs.self]
+        subcommands: [
+            Tools.self, Probe.self, Preview.self, KeyframesCommand.self, Cut.self, Subs.self,
+            Loudness.self, Normalize.self, Audition.self,
+        ]
     )
 }
 
@@ -332,6 +335,148 @@ struct Subs: AsyncParsableCommand {
             print(String(format: "实际起点 %@（提前 %.3f 秒），字幕已按它平移。", Timecode.format(k), range.start - k))
         }
         print("输出：\(result.output.path)")
+    }
+}
+
+/// `skimcut loudness <文件…>`：检测响度和爆音。
+struct Loudness: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "检测整体响度 LUFS、真峰值 dBTP、响度范围 LRA，并找出爆音（结果按路径 + 大小 + 修改时间缓存）。")
+
+    @Argument(help: "视频文件，可以一次给多个。", transform: { URL(fileURLWithPath: $0) })
+    var files: [URL]
+
+    @Option(name: .customLong("burst"), parsing: .unconditional,
+            help: "短时响度超过“整体响度 + 这么多 LU”算爆音。")
+    var burstMargin: Double = LoudnessBursts.defaultMargin
+
+    @Flag(name: .customLong("no-cache"), help: "不用缓存，重新检测。")
+    var noCache = false
+
+    func run() async throws {
+        let exporter = VolumeExporter(cache: noCache ? nil : .shared)
+        for file in files {
+            let info = try await MediaInfo.probe(file)
+            guard !info.audioStreams.isEmpty else {
+                print("\(file.lastPathComponent)：\(LoudnessError.noAudio.errorDescription!)")
+                continue
+            }
+            let analysis = try await exporter.analyze(file, duration: info.bestDuration)
+            print("\(file.lastPathComponent)：\(analysis.stats.summary)")
+            let bursts = analysis.bursts(margin: burstMargin)
+            if bursts.isEmpty {
+                print(String(format: "  没有爆音（阈值：整体 + %g LU）", burstMargin))
+            }
+            for b in bursts {
+                print(String(format: "  爆音 %@ – %@，最高 %.1f LUFS", Timecode.format(b.start), Timecode.format(b.end), b.peak))
+            }
+        }
+    }
+}
+
+/// 统一音量的选项（`normalize` 和 `audition` 共用）。
+struct NormalizeArguments: ParsableArguments {
+    enum PresetOption: String, ExpressibleByArgument, CaseIterable { case unify, flatten, strong }
+
+    @Option(parsing: .unconditional, help: "目标响度（LUFS）。")
+    var target: Double = NormalizeOptions.defaultTarget
+
+    @Option(name: .customLong("true-peak"), parsing: .unconditional, help: "真峰值上限（dBTP）。")
+    var truePeak: Double = NormalizeOptions.defaultTruePeak
+
+    @Option(help: "强度：unify（只统一音量）、flatten（统一 + 拉平）、strong（强力拉平）。")
+    var preset: PresetOption = .unify
+
+    @Flag(help: "减少喷麦声（highpass=f=80）。")
+    var highpass = false
+
+    @Flag(help: "削波修复（adeclip，只能改善，不能完全恢复；比较慢）。")
+    var declip = false
+
+    @Option(name: .customLong("duck"), help: "局部压低：起点-终点[@dB]，例如 10-10.3@-12。可以重复。")
+    var ducks: [String] = []
+
+    func options() throws -> NormalizeOptions {
+        let parsed = try ducks.map { spec -> VolumeDuck in
+            guard let duck = VolumeDuck.parse(spec) else {
+                throw ValidationError("无法识别的 --duck：\(spec)（例如 10-10.3@-12）")
+            }
+            return duck
+        }
+        return NormalizeOptions(
+            targetLoudness: target, truePeak: truePeak, preset: LoudnessPreset(rawValue: preset.rawValue)!,
+            highpass: highpass, declip: declip, ducks: parsed)
+    }
+}
+
+/// `skimcut normalize <文件…>`：统一音量，写成新文件。
+struct Normalize: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "统一音量（ffmpeg-normalize，两遍 EBU R128）。视频直接复制，只重新编码音频，输出 原名_norm.扩展名；原文件不变。")
+
+    @Argument(help: "视频文件，可以一次给多个。", transform: { URL(fileURLWithPath: $0) })
+    var files: [URL]
+
+    @OptionGroup var normalize: NormalizeArguments
+
+    @Option(name: .customLong("output-dir"), help: "输出目录，默认放在原文件旁边。", transform: { URL(fileURLWithPath: $0) })
+    var outputDirectory: URL?
+
+    func run() async throws {
+        let options = try normalize.options()
+        var failed = false
+        for file in files {
+            let last = LastPercent()
+            do {
+                let result = try await VolumeExporter().export(
+                    VolumeJob(source: file, options: options, outputDirectory: outputDirectory)
+                ) { p in
+                    if let p, last.update(Int(p * 100)) {
+                        FileHandle.standardError.write(Data("\r\(file.lastPathComponent) \(Int(p * 100))%".utf8))
+                    }
+                }
+                FileHandle.standardError.write(Data("\n".utf8))
+                print("\(file.lastPathComponent)：\(result.comparison)")
+                if let note = result.note { print("  注意：\(note)") }
+                if let output = result.output { print("  输出：\(output.path)") }
+            } catch {
+                FileHandle.standardError.write(Data("\n".utf8))
+                print("\(file.lastPathComponent)：失败：\((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)")
+                failed = true
+            }
+        }
+        if failed { throw ExitCode(1) }
+    }
+}
+
+/// `skimcut audition <文件> --at T`：生成一段处理后的声音，用来和原声对比。
+struct Audition: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "从某个位置生成一段处理后的声音（M4A），音量和整个文件处理后一致。")
+
+    @Argument(help: "视频文件。", transform: { URL(fileURLWithPath: $0) })
+    var file: URL
+
+    @Option(help: "开始位置。", transform: parseTime)
+    var at: Double = 0
+
+    @Option(help: "长度（秒）。")
+    var duration: Double = VolumeAuditioner.defaultDuration
+
+    @OptionGroup var normalize: NormalizeArguments
+
+    @Option(name: .shortAndLong, help: "输出的 .m4a 文件。", transform: { URL(fileURLWithPath: $0) })
+    var output: URL
+
+    func run() async throws {
+        let options = try normalize.options()
+        let info = try await MediaInfo.probe(file)
+        let stats = try await VolumeExporter().analyze(file, duration: info.bestDuration).stats
+        let auditioner = VolumeAuditioner()
+        let measured = try await auditioner.measure(file, options: options, stats: stats, duration: info.bestDuration)
+        try await auditioner.render(
+            file, start: at, duration: duration, options: options, stats: stats, measured: measured, output: output)
+        print("输出：\(output.path)")
     }
 }
 
