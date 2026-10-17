@@ -49,6 +49,9 @@ final class AppModel {
     @ObservationIgnored private var analysisObserver: Task<Void, Never>?
 
     init() {
+        // `SkimCutApp` 的属性初始化（创建这个对象）比它的 init 先运行：默认值必须在这里先注册，
+        // 否则批量窗口会读到 0 LUFS / 0 dBTP。
+        AppSettings.registerDefaults()
         let queue = TaskQueue()
         let analysisQueue = TaskQueue()
         self.queue = queue

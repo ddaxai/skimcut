@@ -159,6 +159,26 @@ final class VolumeIntegrationTests: XCTestCase {
         XCTAssertEqual(outside - inside, 12, accuracy: 2, "压低段 \(inside)，正常段 \(outside)")
     }
 
+    /// 用户实测：短促的爆音 + 峰值高（loudnorm 用动态模式）时，压低放在 loudnorm 前面几乎没效果。
+    /// 现在放在后面：和不压低的输出相比，爆音那里正好低 12 dB，其他地方不变。
+    func testDuckOnBurstSurvivesDynamicNormalization() async throws {
+        let media = try TestSupport.testMedia()
+        try requireNormalizeTools()
+        let source = media.appendingPathComponent("bursts.mp4")
+        let analysis = try await exporter().analyze(source, duration: 30)
+        let burst = try XCTUnwrap(analysis.bursts(margin: 10).first)
+        let plain = try await exporter().export(VolumeJob(source: source, outputDirectory: dir))
+        let ducked = try await exporter().export(VolumeJob(
+            source: source, options: NormalizeOptions(ducks: [VolumeDuck(start: burst.start, end: burst.end, gain: -12)]),
+            outputDirectory: dir))
+        XCTAssertEqual(plain.normalizationType, "dynamic", "这个素材峰值高，应该走动态模式")
+        let a = try await measure(try XCTUnwrap(plain.output))
+        let b = try await measure(try XCTUnwrap(ducked.output))
+        let peak = burst.end
+        XCTAssertEqual(momentary(a, at: peak) - momentary(b, at: peak), 12, accuracy: 1.5, "爆音处")
+        XCTAssertEqual(momentary(a, at: 5) - momentary(b, at: 5), 0, accuracy: 1, "其他地方不变")
+    }
+
     func testFlattenAndStrongPresetsAndRepairs() async throws {
         let media = try TestSupport.testMedia()
         try requireNormalizeTools()

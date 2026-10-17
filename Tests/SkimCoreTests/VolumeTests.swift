@@ -29,7 +29,12 @@ final class VolumeTests: XCTestCase {
             preset: .strong, highpass: true, declip: true, ducks: [VolumeDuck(start: 1, end: 2, gain: -6)])
         let stats = LoudnessStats(integrated: -30, truePeak: -10, range: 8)
         let chain = NormalizePlanner.preFilters(options, stats: stats)!
-        XCTAssertEqual(chain, #"adeclip,highpass=f=80,volume=-6.0dB:enable='between(t\,1.000\,2.000)',volume=14.00dB,acompressor=threshold=0.07943:ratio=3:attack=10:release=250"#)
+        XCTAssertEqual(chain, "adeclip,highpass=f=80,volume=14.00dB,acompressor=threshold=0.07943:ratio=3:attack=10:release=250")
+        // 局部压低在 loudnorm 后面。
+        XCTAssertEqual(NormalizePlanner.postFilters(options), #"volume=-6.0dB:enable='between(t\,1.000\,2.000)'"#)
+        XCTAssertNil(NormalizePlanner.postFilters(NormalizeOptions()))
+        let args = NormalizePlanner.arguments(input: input, output: output, options: options, stats: stats)
+        XCTAssertEqual(args[args.firstIndex(of: "-pof")! + 1], #"volume=-6.0dB:enable='between(t\,1.000\,2.000)'"#)
     }
 
     func testCompressorWithoutStatsHasNoGain() {
@@ -132,8 +137,8 @@ final class VolumeTests: XCTestCase {
         XCTAssertEqual(args[args.firstIndex(of: "-t")! + 1], "15.000")
         XCTAssertEqual(args[args.firstIndex(of: "-map")! + 1], "0:a:0")
         let af = args[args.firstIndex(of: "-af")! + 1]
-        XCTAssertTrue(af.hasPrefix(#"volume=-12.0dB:enable='between(t\,2.000\,2.300)',loudnorm=i=-16.00:"#), af)
-        XCTAssertTrue(af.hasSuffix(",aresample=48000"), af)
+        XCTAssertTrue(af.hasPrefix("loudnorm=i=-16.00:"), af)
+        XCTAssertTrue(af.hasSuffix(#",volume=-12.0dB:enable='between(t\,2.000\,2.300)',aresample=48000"#), af)
         XCTAssertEqual(args.last, out.path)
     }
 

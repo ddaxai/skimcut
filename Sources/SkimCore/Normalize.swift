@@ -153,17 +153,23 @@ public enum NormalizePlanner {
         return filters
     }
 
-    /// 写在 loudnorm 前面的滤镜（`-prf`）：削波修复 → 减少喷麦声 → 局部压低 → 强力拉平的压缩。
-    public static func preFilters(
-        _ options: NormalizeOptions, stats: LoudnessStats?, shift: Double = 0, limit: Double? = nil
-    ) -> String? {
+    /// 写在 loudnorm 前面的滤镜（`-prf`）：削波修复 → 减少喷麦声 → 强力拉平的压缩。
+    public static func preFilters(_ options: NormalizeOptions, stats: LoudnessStats?) -> String? {
         var filters: [String] = []
         if options.declip { filters.append("adeclip") }
         if options.highpass { filters.append("highpass=f=80") }
-        filters += options.ducks.compactMap { duckFilter($0, shift: shift, limit: limit) }
         if options.preset == .strong {
             filters += compressorFilters(target: options.targetLoudness, stats: stats)
         }
+        return filters.isEmpty ? nil : filters.joined(separator: ",")
+    }
+
+    /// 写在 loudnorm 后面的滤镜（`-pof`）：局部压低。
+    /// 放在统一音量之后，才能准确降低设定的 dB：放在前面时，动态模式会把压低的地方又拉回去
+    /// （已验证：一段爆音压低 12 dB，放在前面只降了不到 1 dB，放在后面正好 12 dB）。
+    /// `shift` 秒从时间里减掉（试听片段从 0 开始）。
+    public static func postFilters(_ options: NormalizeOptions, shift: Double = 0, limit: Double? = nil) -> String? {
+        let filters = options.ducks.compactMap { duckFilter($0, shift: shift, limit: limit) }
         return filters.isEmpty ? nil : filters.joined(separator: ",")
     }
 
@@ -196,6 +202,9 @@ public enum NormalizePlanner {
         args += audioCodecArguments + ["-ar", sampleRate]
         if let pre = preFilters(options, stats: stats) {
             args += ["-prf", pre]
+        }
+        if let post = postFilters(options) {
+            args += ["-pof", post]
         }
         // ffmpeg-normalize 只按整体响度判断是否跳过，所以只在“只统一音量”时交给它。
         if options.preset == .unify, !options.hasRepairs {
@@ -280,8 +289,9 @@ public enum NormalizePlanner {
         stats: LoudnessStats, measured: LoudnessStats, output: URL
     ) -> [String] {
         var filters: [String] = []
-        if let pre = preFilters(options, stats: stats, shift: start, limit: duration) { filters.append(pre) }
+        if let pre = preFilters(options, stats: stats) { filters.append(pre) }
         filters.append("loudnorm=" + secondPassLoudnorm(options, measured: measured))
+        if let post = postFilters(options, shift: start, limit: duration) { filters.append(post) }
         filters.append("aresample=" + sampleRate)
         return ["-hide_banner", "-nostdin", "-n"] + FFmpegProgress.arguments + [
             "-ss", String(format: "%.3f", start), "-i", input.path, "-t", String(format: "%.3f", duration),

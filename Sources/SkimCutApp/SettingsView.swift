@@ -41,11 +41,14 @@ enum AppSettings {
     }
 
     /// 新打开的视频和批量窗口使用的默认音量选项（局部压低和修复选项每次重新选）。
+    /// 没有设置过（或者读的时候默认值还没注册）时用 -16 LUFS / -1.5 dBTP。
     static var defaultNormalizeOptions: NormalizeOptions {
         let d = UserDefaults.standard
+        let target = (d.object(forKey: targetLoudnessKey) as? Double).flatMap { (-30.0...(-10.0)).contains($0) ? $0 : nil }
+        let peak = (d.object(forKey: truePeakKey) as? Double).flatMap { (-6.0...0.0).contains($0) ? $0 : nil }
         return NormalizeOptions(
-            targetLoudness: d.double(forKey: targetLoudnessKey),
-            truePeak: d.double(forKey: truePeakKey),
+            targetLoudness: target ?? NormalizeOptions.defaultTarget,
+            truePeak: peak ?? NormalizeOptions.defaultTruePeak,
             preset: LoudnessPreset(rawValue: d.string(forKey: loudnessPresetKey) ?? "") ?? .unify)
     }
 
