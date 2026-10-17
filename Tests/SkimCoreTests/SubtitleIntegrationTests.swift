@@ -164,7 +164,9 @@ final class SubtitleIntegrationTests: XCTestCase {
         let out = try await probe(result.output)
         let v0 = try XCTUnwrap(out.videoStream?.startTime)
         // SRT：1.0–3.5 在起点之前去掉；4.0–6.0 → v0…v0+2；7.25–9.75 → v0+3.25…v0+5（截到终点 9 秒）。
-        // 字幕时间只到毫秒，v0 在不同 ffmpeg 版本里写法不同（0.075 / 0.0667…），允许不到半帧的误差。
+        // 字幕时间只到毫秒；v0 在不同 ffmpeg 版本里不同（0.075 / 0.0667…），macOS 的新版 ffmpeg 封装字幕时
+        // 还会把视频起点再挪十几毫秒（0.067 → 0.054）。允许不到半帧（30 fps）的误差，看不出来。
+        let halfFrame = 0.5 / 30
         let srt = try await extractSubtitle(result.output, 0, as: "srt")
         XCTAssertFalse(srt.contains("第一条字幕"))
         let cues = srt.split(separator: "\n").filter { $0.contains("-->") }.compactMap { line -> (Double, Double)? in
@@ -174,8 +176,8 @@ final class SubtitleIntegrationTests: XCTestCase {
         XCTAssertEqual(cues.count, 2, srt)
         let expected = [(v0, v0 + 2), (v0 + 3.25, v0 + 5)]
         for (cue, want) in zip(cues, expected) {
-            XCTAssertEqual(cue.0, want.0, accuracy: 0.012, "v0 = \(v0)\n\(srt)")
-            XCTAssertEqual(cue.1, want.1, accuracy: 0.012, "v0 = \(v0)\n\(srt)")
+            XCTAssertEqual(cue.0, want.0, accuracy: halfFrame, "v0 = \(v0)\n\(srt)")
+            XCTAssertEqual(cue.1, want.1, accuracy: halfFrame, "v0 = \(v0)\n\(srt)")
         }
         // ASS 也一样平移，样式保留。
         let ass = try await extractSubtitle(result.output, 1, as: "ass")
