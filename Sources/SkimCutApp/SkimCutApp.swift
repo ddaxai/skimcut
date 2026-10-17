@@ -48,6 +48,9 @@ struct SkimCutApp: App {
                 Button("终点设在这里　O") { model.player?.perform(.markOut) }
                 Button("清除选区") { model.player?.resetSelection() }
             }
+            CommandGroup(after: .windowList) {
+                BatchWindowMenuItem()
+            }
             CommandGroup(after: .toolbar) {
                 Button("放大时间轴") { model.player?.perform(.zoomIn) }
                     .keyboardShortcut("+", modifiers: .command)
@@ -61,9 +64,24 @@ struct SkimCutApp: App {
             }
         }
 
+        Window("批量统一音量", id: BatchVolumeView.windowID) {
+            BatchVolumeView(batch: model.batch)
+        }
+        .defaultSize(width: 980, height: 520)
+
         Settings {
             SettingsView()
         }
+    }
+}
+
+/// 菜单“窗口 > 批量统一音量…”。
+private struct BatchWindowMenuItem: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("批量统一音量…") { openWindow(id: BatchVolumeView.windowID) }
+            .keyboardShortcut("b", modifiers: [.command, .shift])
     }
 }
 
@@ -81,10 +99,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// 视频拖到 Dock 图标上、或者在 Finder 里用“打开方式”选择 SkimCut。
+    /// 一个视频直接打开；多个视频放进批量统一音量窗口。
     func application(_ application: NSApplication, open urls: [URL]) {
-        if let url = urls.first {
-            AppModel.shared.open(url)
-        }
+        AppModel.shared.openFiles(urls)
     }
 
     /// 退出时结束所有子进程（并删除没完成的输出文件），释放播放器，删除预览临时文件。

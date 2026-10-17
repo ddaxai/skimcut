@@ -148,6 +148,12 @@ public final class PreviewFileStore: @unchecked Sendable {
         return sessionDirectory.appendingPathComponent(name)
     }
 
+    /// 其他临时文件（例如音量试听片段），同样在关闭视频或退出时删除。
+    public func makeTemporaryURL(prefix: String, extension ext: String) throws -> URL {
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        return sessionDirectory.appendingPathComponent("\(prefix)-\(UUID().uuidString.prefix(8)).\(ext)")
+    }
+
     public func remove(_ url: URL) {
         try? FileManager.default.removeItem(at: url)
     }

@@ -21,6 +21,12 @@ final class AppModel {
     private(set) var cut: CutController?
     /// 当前视频的字幕面板状态。
     private(set) var subtitles: SubtitleController?
+    /// 当前视频的音量面板状态。
+    private(set) var volume: VolumeController?
+    /// 批量统一音量窗口的状态。
+    let batch: BatchVolumeController
+    /// 请求打开批量统一音量窗口（窗口由界面打开）。
+    var pendingBatchWindow = false
     /// 时间轴下面显示哪个面板。
     var bottomPanel: BottomPanel = .cut
     /// 导出记录（任务的进度和状态来自 `jobs`）。
@@ -31,19 +37,36 @@ final class AppModel {
     private(set) var tools: [ToolStatus] = []
     private(set) var isCheckingTools = false
 
-    let queue = TaskQueue()
+    /// 剪切、导出、生成预览的任务队列（一次一个）。
+    let queue: TaskQueue
+    /// 响度检测和试听的队列（一次一个），不让导出任务排队等着它们。
+    let analysisQueue: TaskQueue
     let previewStore = PreviewFileStore()
     @ObservationIgnored private var openTask: Task<Void, Never>?
     /// 每次打开换一个新值；旧的加载任务发现自己过期后不再修改状态。
     @ObservationIgnored private var openToken = UUID()
     @ObservationIgnored private var queueObserver: Task<Void, Never>?
+    @ObservationIgnored private var analysisObserver: Task<Void, Never>?
 
     init() {
-        let queue = self.queue
+        // `SkimCutApp` 的属性初始化（创建这个对象）比它的 init 先运行：默认值必须在这里先注册，
+        // 否则批量窗口会读到 0 LUFS / 0 dBTP。
+        AppSettings.registerDefaults()
+        let queue = TaskQueue()
+        let analysisQueue = TaskQueue()
+        self.queue = queue
+        self.analysisQueue = analysisQueue
+        self.batch = BatchVolumeController(queue: queue, analysisQueue: analysisQueue)
         queueObserver = Task { @MainActor [weak self] in
             // 只在任务状态变化时被唤醒，没有轮询。
             for await jobs in await queue.updates() {
                 self?.jobs = jobs
+            }
+        }
+        // 检测和试听的进度由音量面板和批量窗口自己显示；结束的任务直接从队列里去掉。
+        analysisObserver = Task {
+            for await jobs in await analysisQueue.updates() where jobs.contains(where: { $0.status.isFinished }) {
+                await analysisQueue.removeFinished()
             }
         }
     }
@@ -79,6 +102,8 @@ final class AppModel {
             let queue = self.queue
             Task { await queue.cancel(jobID) }
         }
+        volume?.close()
+        volume = nil
         if let player {
             player.close()
             if player.playbackURL != player.sourceURL {
@@ -93,6 +118,7 @@ final class AppModel {
 
     /// 退出 App 时调用（同步）。
     func prepareForTermination() {
+        volume?.close()
         player?.close()
         player = nil
         previewStore.removeSessionDirectory()
@@ -215,6 +241,14 @@ final class AppModel {
             inspection: inspection, backingScale: scale)
         cut = CutController(source: source)
         subtitles = SubtitleController(source: source)
+        if let player {
+            let volume = VolumeController(
+                source: source, duration: player.duration, player: player,
+                analysisQueue: analysisQueue, previewStore: previewStore)
+            self.volume = volume
+            // 打开视频时在后台检测一次响度（有缓存就直接显示）。
+            if AppSettings.autoDetectLoudness { volume.detect() }
+        }
         loadState = .idle
         openTask = nil
     }
@@ -286,10 +320,50 @@ final class AppModel {
         }
     }
 
-    /// 拖进窗口的文件：字幕文件加进字幕面板，否则当成视频打开。
+    // MARK: - 音量
+
+    /// 统一音量，写成新文件（进任务队列）。原文件永远不变。
+    func exportVolume(_ volume: VolumeController) {
+        let job = volume.job()
+        let title = "统一音量 \(job.source.lastPathComponent)（\(job.options.preset.displayName)，\(String(format: "%g", job.options.targetLoudness)) LUFS）"
+        let queue = self.queue
+        Task { @MainActor [weak self, weak volume] in
+            let id = await queue.enqueue(title: title) { [weak self, weak volume] context in
+                let model = self
+                let target = volume
+                let result = try await VolumeExporter().export(job) { progress in
+                    context.report(progress: progress)
+                }
+                let note = [result.comparison, result.note].compactMap { $0 }.joined(separator: "\n")
+                await model?.exportPlanned(id: context.id, output: result.output, note: note)
+                await target?.exportFinished(result)
+            }
+            guard let self else { return }
+            if !self.exports.contains(where: { $0.id == id }) {
+                self.exports.append(ExportRecord(id: id, title: title))
+            }
+        }
+    }
+
+    /// 打开批量统一音量窗口，并加入这些视频。
+    func addToBatch(_ urls: [URL]) {
+        batch.add(urls)
+        pendingBatchWindow = true
+    }
+
+    /// 从 Dock 或 Finder 打开的文件：一个视频直接打开，多个视频放进批量统一音量窗口。
+    func openFiles(_ urls: [URL]) {
+        _ = handleDrop(urls)
+    }
+
+    /// 拖进窗口的文件：字幕文件加进字幕面板；一个视频直接打开；多个视频放进批量统一音量窗口。
     func handleDrop(_ urls: [URL]) -> Bool {
         let subtitleFiles = urls.filter(SubtitleFormat.isSubtitleFile)
         let others = urls.filter { !SubtitleFormat.isSubtitleFile($0) }
+        if others.count > 1 {
+            addToBatch(others)
+            return true
+        }
         if let video = others.first {
             open(video)
             return true
@@ -304,13 +378,13 @@ final class AppModel {
         return true
     }
 
-    private func exportPlanned(id: JobID, output: URL, note: String?) {
+    private func exportPlanned(id: JobID, output: URL?, note: String?) {
         if let index = exports.firstIndex(where: { $0.id == id }) {
             exports[index].output = output
             exports[index].note = note
         } else {
             // 任务开始得比记录加进列表还快。
-            var record = ExportRecord(id: id, title: output.lastPathComponent)
+            var record = ExportRecord(id: id, title: output?.lastPathComponent ?? "")
             record.output = output
             record.note = note
             exports.append(record)
@@ -374,6 +448,7 @@ struct ExportRecord: Identifiable, Equatable {
 enum BottomPanel: String, CaseIterable, Identifiable {
     case cut
     case subtitles
+    case volume
 
     var id: String { rawValue }
 
@@ -381,6 +456,7 @@ enum BottomPanel: String, CaseIterable, Identifiable {
         switch self {
         case .cut: return "剪切"
         case .subtitles: return "字幕"
+        case .volume: return "音量"
         }
     }
 }

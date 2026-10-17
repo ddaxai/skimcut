@@ -44,11 +44,12 @@ make_level loud_quiet.mp4 0.02
 make_level loud_medium.mp4 0.1
 make_level loud_loud.mp4 0.6
 
-# 4. 中间带几段突然大声的视频：整体较轻，3.0–3.3 秒和 7.0–7.2 秒提高 24 dB。
+# 4. 中间带几段突然大声的视频：30 秒，平时音量正常，10.0–10.3 秒和 20.0–20.2 秒突然提高 20 dB。
+#    爆音要短：太长或太多会把“整体响度”拉高，就不比整体响度高出 10 LU 了。
 if need bursts.mp4; then
-  "${FF[@]}" -f lavfi -i "color=c=navy:size=640x360:rate=25:duration=10" \
-    -f lavfi -i "anoisesrc=color=pink:amplitude=0.03:sample_rate=48000:duration=10:seed=2" \
-    -af "volume=24dB:enable='between(t,3,3.3)',volume=24dB:enable='between(t,7,7.2)',alimiter=limit=0.99" \
+  "${FF[@]}" -f lavfi -i "color=c=navy:size=640x360:rate=25:duration=30" \
+    -f lavfi -i "anoisesrc=color=pink:amplitude=0.05:sample_rate=48000:duration=30:seed=2" \
+    -af "volume=20dB:enable='between(t,10,10.3)',volume=20dB:enable='between(t,20,20.2)',alimiter=limit=0.99" \
     -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 128k -shortest "$OUT/bursts.mp4"
 fi
 

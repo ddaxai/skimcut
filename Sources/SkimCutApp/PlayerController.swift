@@ -46,6 +46,16 @@ final class PlayerController {
     @ObservationIgnored var redrawTimeline: (() -> Void)?
     /// 让播放画面重新接收键盘（在输入框里按回车之后）。由播放画面设置。
     @ObservationIgnored var focusPlayer: (() -> Void)?
+    /// 爆音标记（时间轴上的红色区间），由音量面板设置。
+    @ObservationIgnored var loudnessMarkers: [LoudnessBurst] = [] {
+        didSet { redrawTimeline?() }
+    }
+    /// 播放停下时调用（音量试听用它同时停下处理后的声音）。
+    @ObservationIgnored var onPause: (() -> Void)?
+    /// 试听开始前的 seek 还没完成时，用户又做了别的操作：旧的开始请求作废。
+    @ObservationIgnored private var syncToken = UUID()
+    @ObservationIgnored private var syncSeeksRemaining = 0
+    @ObservationIgnored private weak var syncCompanion: AVPlayer?
 
     @ObservationIgnored private var chase = ChaseSeeker()
     @ObservationIgnored private var skim = SkimController()
@@ -95,6 +105,8 @@ final class PlayerController {
         thumbnails.close()
         redrawTimeline = nil
         focusPlayer = nil
+        onPause = nil
+        loudnessMarkers = []
     }
 
     var isPlaying: Bool { mode != .paused }
@@ -154,9 +166,10 @@ final class PlayerController {
     // MARK: - 播放
 
     /// 开始正常播放。如果正在 skimming，从 skimmer 位置开始，播放头也移过去（和 Final Cut Pro 一样）。
-    func startUserPlayback(rate newRate: Float) {
+    /// `fromSkimmer` 为 false 时总是从播放头开始（例如点击爆音标记）。
+    func startUserPlayback(rate newRate: Float, fromSkimmer: Bool = true) {
         updateCapabilities()
-        let skimming = skim.state == .skimming || skim.state == .dwellPlaying
+        let skimming = fromSkimmer && (skim.state == .skimming || skim.state == .dwellPlaying)
         if mode == .dwell {
             player.pause()
         }
@@ -175,7 +188,62 @@ final class PlayerController {
         redrawTimeline?()
     }
 
+    /// 从 `t` 开始正常播放（点击爆音标记时，跳到它前面一点试听）。
+    func play(from t: Double) {
+        if mode != .paused { pause() }
+        playhead = min(max(t, 0), duration)
+        revealPlayhead()
+        startUserPlayback(rate: 1, fromSkimmer: false)
+    }
+
+    /// 音量试听：画面从 `t` 开始播放，同时 `companion`（处理后的声音，从 0 开始）在同一时刻开始。
+    /// 两个播放器都先精确 seek，然后用同一个主机时间开始，保持同步。
+    func playInSync(from t: Double, with companion: AVPlayer) {
+        if mode != .paused { pause() }
+        updateCapabilities()
+        handle(skim.userPlaybackStarted())
+        playhead = min(max(t, 0), duration)
+        mode = .user
+        rate = 1
+        shuttle.sync(rate: 1)
+        chase.dropPending()
+        chase.invalidate()
+        pendingRate = nil
+        revealPlayhead()
+        redrawTimeline?()
+
+        let token = UUID()
+        syncToken = token
+        syncCompanion = companion
+        syncSeeksRemaining = 2
+        let time = CMTime(seconds: playhead, preferredTimescale: 90000)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.syncSeekFinished(token) }
+        }
+        companion.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.syncSeekFinished(token) }
+        }
+    }
+
+    /// 两个 seek 都完成后，用同一个主机时间（0.1 秒后）让两个播放器一起开始。
+    private func syncSeekFinished(_ token: UUID) {
+        guard token == syncToken else { return }
+        syncSeeksRemaining -= 1
+        guard syncSeeksRemaining == 0, mode == .user, let companion = syncCompanion else { return }
+        let host = CMTimeAdd(CMClockGetTime(CMClockGetHostTimeClock()), CMTime(value: 1, timescale: 10))
+        player.setRate(1, time: .invalid, atHostTime: host)
+        companion.setRate(1, time: .invalid, atHostTime: host)
+        syncCompanion = nil
+        // 开始时刻过了才注册时间回调（之前播放器的速率可能还是 0，会被当成“自己停下了”）。
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard let self, self.syncToken == token, self.mode == .user else { return }
+            self.installTimeObserver()
+        }
+    }
+
     func pause() {
+        syncToken = UUID()
         let wasPlaying = mode != .paused
         // 还在 seek（刚开始播放就暂停）时，播放器的时间还是旧的，播放头保持 seek 目标。
         let playerTimeIsCurrent = pendingRate == nil && !chase.isSeeking
@@ -191,7 +259,10 @@ final class PlayerController {
         rate = 0
         shuttle.sync(rate: 0)
         chase.invalidate()
-        if wasPlaying { redrawTimeline?() }
+        if wasPlaying {
+            redrawTimeline?()
+            onPause?()
+        }
     }
 
     private func setRate(_ newRate: Float) {
@@ -537,5 +608,7 @@ enum TimelineMetrics {
     static let rulerHeight: CGFloat = 18
     static let thumbnailHeight: CGFloat = 56
     static let padding: CGFloat = 4
+    /// 缩略图上沿可以点中爆音标记的高度。
+    static let markerHitHeight: CGFloat = 12
     static var totalHeight: CGFloat { rulerHeight + thumbnailHeight + padding * 2 }
 }
