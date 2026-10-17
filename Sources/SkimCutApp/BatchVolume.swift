@@ -218,9 +218,47 @@ final class BatchVolumeController {
 }
 
 /// 批量统一音量窗口。
-struct BatchVolumeView: View {
-    static let windowID = "batch-volume"
+/// 批量处理窗口：统一音量 / 修改日期两个页面。
+struct BatchWindow: View {
+    static let windowID = "batch"
 
+    @Bindable var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("", selection: $model.batchTab) {
+                ForEach(BatchTab.allCases) { tab in
+                    Text(tab.title).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            switch model.batchTab {
+            case .volume: BatchVolumeView(batch: model.batch)
+            case .dates: BatchDatesView(batch: model.batchDates)
+            }
+        }
+        .padding(14)
+        .frame(minWidth: 900, minHeight: 440)
+    }
+}
+
+/// 批量处理窗口的页面。
+enum BatchTab: String, CaseIterable, Identifiable {
+    case volume, dates
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .volume: return "统一音量"
+        case .dates: return "修改日期"
+        }
+    }
+}
+
+struct BatchVolumeView: View {
     @Bindable var batch: BatchVolumeController
     @State private var selection = Set<UUID>()
     @State private var isDropTargeted = false
@@ -231,8 +269,6 @@ struct BatchVolumeView: View {
             table
             bottomRow
         }
-        .padding(14)
-        .frame(minWidth: 820, minHeight: 420)
         .overlay {
             if isDropTargeted {
                 RoundedRectangle(cornerRadius: 8)

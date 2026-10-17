@@ -188,6 +188,15 @@ final class PlayerController {
         redrawTimeline?()
     }
 
+    /// 把播放头移到 `t`（不播放），例如修改元数据后重新打开视频时回到原来的位置。
+    func movePlayhead(to t: Double) {
+        if mode != .paused { pause() }
+        playhead = min(max(t, 0), duration)
+        chaseSeek(SeekRequest(time: playhead))
+        revealPlayhead()
+        redrawTimeline?()
+    }
+
     /// 从 `t` 开始正常播放（点击爆音标记时，跳到它前面一点试听）。
     func play(from t: Double) {
         if mode != .paused { pause() }
