@@ -68,6 +68,13 @@ final class MetadataTests: XCTestCase {
         XCTAssertNil(MetadataReader.recordingDate(zero))
         let mkv = [MetadataEntry(family: "Matroska", tag: "DateTimeOriginal", value: "2026:10:09 06:00:00Z")]
         XCTAssertEqual(MetadataReader.recordingDate(mkv)?.0.utcOffset, 0)
+        // ExifTool 13 把 MKV 的段信息放在 Info 组里。
+        let mkv13 = [
+            MetadataEntry(family: "Info", tag: "DateTimeOriginal", value: "2026:10:09 06:00:00Z"),
+            MetadataEntry(family: "Info", tag: "Title", value: "标题"),
+        ]
+        XCTAssertEqual(MetadataReader.recordingDate(mkv13)?.0.exifToolString, "2026:10:09 06:00:00+00:00")
+        XCTAssertEqual(MetadataReader.first(mkv13, MetadataReader.titleKeys), "标题")
     }
 
     func testContainerKind() {

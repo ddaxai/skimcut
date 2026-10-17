@@ -193,7 +193,8 @@ public enum MetadataReader {
         return nil
     }
 
-    static let titleKeys = ["Keys:Title", "ItemList:Title", "UserData:Title", "QuickTime:Title", "Matroska:Title"]
+    /// MKV 的段信息：ExifTool 12 的组名是 `Matroska`，13 是 `Info`。
+    static let titleKeys = ["Keys:Title", "ItemList:Title", "UserData:Title", "QuickTime:Title", "Matroska:Title", "Info:Title"]
     static let descriptionKeys = [
         "Keys:Description", "ItemList:Description", "UserData:Description", "ItemList:Comment", "UserData:Comment",
         "Keys:Comment",
@@ -204,7 +205,8 @@ public enum MetadataReader {
         if let keys = first(entries, ["Keys:CreationDate"]).flatMap({ QuickTimeDate.parse($0) }) {
             return (keys, true)
         }
-        if let utc = first(entries, ["QuickTime:CreateDate", "Matroska:DateTimeOriginal"]).flatMap({ QuickTimeDate.parse($0) }) {
+        let utcKeys = ["QuickTime:CreateDate", "Matroska:DateTimeOriginal", "Info:DateTimeOriginal"]
+        if let utc = first(entries, utcKeys).flatMap({ QuickTimeDate.parse($0) }) {
             return (utc, false)
         }
         return nil
