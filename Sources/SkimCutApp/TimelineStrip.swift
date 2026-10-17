@@ -2,16 +2,19 @@ import AppKit
 import SkimCore
 import SwiftUI
 
-/// 时间轴：缩略图条 + 刻度 + 选区（白框和两端手柄）+ 播放头（黄色）+ skimmer（红色）。
+/// 时间轴：缩略图条 + 刻度 + 选区（白框和两端手柄）+ 爆音标记（红色区间）+ 播放头（黄色）+ skimmer（红色）。
 ///
 /// - 鼠标悬停移动：skimming（不需要点击）；
 /// - 点击 / 拖动：移动播放头；拖动选区两端的手柄：改变起点 / 终点；
+/// - 点击缩略图上沿的红色爆音标记：跳到它前面 1 秒开始播放（试听）；
 /// - 触控板捏合、⌘+ / ⌘-：缩放；横向滑动或滚轮：滚动。
 /// 用 AppKit 的 NSTrackingArea 追踪鼠标，只在鼠标移动时产生事件，空闲时没有任何开销。
 final class TimelineNSView: KeyHandlingView {
     private var trackingArea: NSTrackingArea?
     /// 正在拖动的手柄。
     private var draggingHandle: SelectionHandle?
+    /// 鼠标按下时点中了爆音标记：拖动时不移动播放头。
+    private var clickedMarker = false
 
     override var isFlipped: Bool { false }
     override var isOpaque: Bool { true }
@@ -55,9 +58,9 @@ final class TimelineNSView: KeyHandlingView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        let x = localX(event)
-        updateCursor(x: x)
-        controller?.pointerMoved(x: x, timestamp: event.timestamp)
+        let point = convert(event.locationInWindow, from: nil)
+        updateCursor(point)
+        controller?.pointerMoved(x: Double(point.x), timestamp: event.timestamp)
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -74,10 +77,16 @@ final class TimelineNSView: KeyHandlingView {
             controller.dragHandle(handle, x: x)
             return
         }
+        if let burst = markerHit(convert(event.locationInWindow, from: nil)), let controller {
+            clickedMarker = true
+            controller.play(from: burst.start - 1)
+            return
+        }
         controller?.clicked(x: x)
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard !clickedMarker else { return }
         let x = localX(event)
         if let handle = draggingHandle {
             controller?.dragHandle(handle, x: x)
@@ -87,10 +96,11 @@ final class TimelineNSView: KeyHandlingView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        clickedMarker = false
         guard draggingHandle != nil else { return }
         draggingHandle = nil
         controller?.endHandleDrag()
-        updateCursor(x: localX(event))
+        updateCursor(convert(event.locationInWindow, from: nil))
     }
 
     /// 鼠标是否在选区两端的手柄上。
@@ -104,9 +114,28 @@ final class TimelineNSView: KeyHandlingView {
             tolerance: Double(TimelineMetrics.handleWidth) + 2)
     }
 
-    private func updateCursor(x: Double) {
-        if handleHit(x: x) != nil {
+    /// 缩略图条的位置。
+    private var stripRect: NSRect {
+        NSRect(x: 0, y: TimelineMetrics.padding, width: bounds.width, height: TimelineMetrics.thumbnailHeight)
+    }
+
+    /// 鼠标是否在爆音标记上（缩略图上沿的红条附近）。
+    private func markerHit(_ point: NSPoint) -> LoudnessBurst? {
+        guard let controller, !controller.loudnessMarkers.isEmpty else { return nil }
+        let strip = stripRect
+        guard point.y >= strip.maxY - TimelineMetrics.markerHitHeight, point.y <= strip.maxY + 3 else { return nil }
+        let geometry = controller.timeline
+        let x = Double(point.x)
+        return controller.loudnessMarkers.first { burst in
+            x >= geometry.x(for: burst.start) - 3 && x <= geometry.x(for: burst.end) + 3
+        }
+    }
+
+    private func updateCursor(_ point: NSPoint) {
+        if handleHit(x: Double(point.x)) != nil {
             NSCursor.resizeLeftRight.set()
+        } else if markerHit(point) != nil {
+            NSCursor.pointingHand.set()
         } else {
             NSCursor.arrow.set()
         }
@@ -163,6 +192,7 @@ final class TimelineNSView: KeyHandlingView {
         }
 
         drawSelection(controller, geometry: geometry, strip: strip)
+        drawLoudnessMarkers(controller, geometry: geometry, strip: strip)
 
         // 播放头：黄色，顶部带一个小三角。
         let playheadX = CGFloat(geometry.x(for: controller.playhead)).rounded(.down) + 0.5
@@ -259,6 +289,21 @@ final class TimelineNSView: KeyHandlingView {
             // 手柄上的握把线。
             NSColor(white: 0.3, alpha: 1).setFill()
             NSRect(x: rect.midX - 0.5, y: rect.midY - 8, width: 1, height: 16).fill()
+        }
+    }
+
+    /// 爆音：区间淡红色，缩略图上沿一条红色（可以点击）。
+    private func drawLoudnessMarkers(_ controller: PlayerController, geometry: TimelineGeometry, strip: NSRect) {
+        let markers = controller.loudnessMarkers
+        guard !markers.isEmpty else { return }
+        let visible = geometry.visibleRange
+        for burst in markers where burst.end >= visible.lowerBound && burst.start <= visible.upperBound {
+            let x0 = CGFloat(geometry.x(for: burst.start))
+            let x1 = max(CGFloat(geometry.x(for: burst.end)), x0 + 3)
+            NSColor.systemRed.withAlphaComponent(0.22).setFill()
+            NSRect(x: x0, y: strip.minY, width: x1 - x0, height: strip.height).fill()
+            NSColor.systemRed.setFill()
+            NSRect(x: x0, y: strip.maxY - 5, width: x1 - x0, height: 5).fill()
         }
     }
 

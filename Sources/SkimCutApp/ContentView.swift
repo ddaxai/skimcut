@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     let model: AppModel
     @State private var isDropTargeted = false
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,7 +32,7 @@ struct ContentView: View {
         }
         .navigationTitle(model.player?.sourceURL.lastPathComponent ?? "SkimCut")
         .dropDestination(for: URL.self) { urls, _ in
-            // 字幕文件加进字幕面板，视频文件打开。
+            // 字幕文件加进字幕面板；一个视频打开；多个视频放进批量统一音量窗口。
             model.handleDrop(urls.filter(\.isFileURL))
         } isTargeted: { targeted in
             isDropTargeted = targeted
@@ -39,6 +40,14 @@ struct ContentView: View {
         .task {
             await model.checkTools()
         }
+        .onAppear { openBatchWindowIfRequested() }
+        .onChange(of: model.pendingBatchWindow) { openBatchWindowIfRequested() }
+    }
+
+    private func openBatchWindowIfRequested() {
+        guard model.pendingBatchWindow else { return }
+        model.pendingBatchWindow = false
+        openWindow(id: BatchVolumeView.windowID)
     }
 }
 
@@ -93,6 +102,10 @@ struct BottomPanelSwitcher: View {
             case .subtitles:
                 if let subtitles = model.subtitles {
                     SubtitlePanel(player: player, subtitles: subtitles, model: model)
+                }
+            case .volume:
+                if let volume = model.volume {
+                    VolumePanel(player: player, volume: volume, model: model)
                 }
             }
         }
