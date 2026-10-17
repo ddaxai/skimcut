@@ -168,7 +168,8 @@ struct DateTimeZoneEditor: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            DatePicker("时间", selection: $date, displayedComponents: [.date, .hourMinuteAndSecond])
+            // macOS 的选择器只到分钟；秒保留原来的值。
+            DatePicker("时间", selection: $date, displayedComponents: [.date, .hourAndMinute])
                 .environment(\.timeZone, timeZone)
                 .fixedSize()
             Picker("时区", selection: Binding(
