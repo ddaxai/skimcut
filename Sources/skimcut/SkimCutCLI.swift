@@ -10,7 +10,7 @@ struct SkimCutCLI: AsyncParsableCommand {
         version: SkimCoreInfo.version,
         subcommands: [
             Tools.self, Probe.self, Preview.self, KeyframesCommand.self, Cut.self, Subs.self,
-            Loudness.self, Normalize.self, Audition.self, Info.self, Dates.self, Meta.self,
+            Loudness.self, Normalize.self, Audition.self, Info.self, Dates.self, Meta.self, Export.self,
         ]
     )
 }
@@ -597,6 +597,89 @@ struct Meta: AsyncParsableCommand {
     func run() async throws {
         try await MetadataEditor().setText(title: title, description: description, on: file)
         print("已写入并核对。")
+    }
+}
+
+/// `skimcut export <文件>`：一次导出（剪切 → 统一音量 → 加字幕 → 复制元数据），只生成一个文件。
+struct Export: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "一次导出：剪切 → 统一音量 → 加字幕 → 复制元数据，每一步都可以不做，只生成一个新文件。",
+        discussion: """
+        例子：
+          skimcut export a.mp4 --start 1:00 --end 1:30 --normalize --add a.srt
+          skimcut export a.mkv --normalize --preset flatten --format mkv --keep-subs
+        """)
+
+    enum ModeOption: String, ExpressibleByArgument, CaseIterable { case fast, precise }
+    enum FormatOption: String, ExpressibleByArgument, CaseIterable { case mp4, mkv }
+
+    @Argument(help: "视频文件。", transform: { URL(fileURLWithPath: $0) })
+    var file: URL
+
+    @Option(help: "剪切的起点（不给就不剪切）。", transform: parseTime)
+    var start: Double?
+
+    @Option(help: "剪切的终点。", transform: parseTime)
+    var end: Double?
+
+    @Option(help: "剪切模式：fast 或 precise。")
+    var mode: ModeOption = .precise
+
+    @Flag(help: "统一音量（选项见下面的 --target 等）。")
+    var normalize = false
+
+    @OptionGroup var volume: NormalizeArguments
+
+    @Option(name: .customLong("add"), help: "加字幕文件，可以写成 文件[:语言[:标题]]。可以重复。")
+    var add: [String] = []
+
+    @Flag(name: .customLong("keep-subs"), help: "处理字幕时保留源视频里已有的字幕轨道。")
+    var keepSubs = false
+
+    @Option(help: "有字幕时的输出格式：mp4 或 mkv。")
+    var format: FormatOption = .mp4
+
+    @Option(name: .customLong("output-dir"), help: "输出目录，默认放在原文件旁边。", transform: { URL(fileURLWithPath: $0) })
+    var outputDirectory: URL?
+
+    @Flag(name: .customLong("replace-original"), help: "完成后把原文件移到废纸篓，新文件改用原文件的名字（只在 macOS 上可用）。")
+    var replaceOriginal = false
+
+    func validate() throws {
+        guard (start == nil) == (end == nil) else { throw ValidationError("--start 和 --end 要一起给。") }
+    }
+
+    func run() async throws {
+        let info = try await MediaInfo.probe(file)
+        var subtitles: PipelineJob.Subtitles?
+        if !add.isEmpty || keepSubs {
+            var tracks = keepSubs ? info.subtitleStreams.compactMap(SubtitleTrack.embedded) : []
+            for spec in add {
+                let parts = spec.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+                let url = URL(fileURLWithPath: parts[0])
+                guard let format = SubtitleFormat.detect(url) else {
+                    throw ValidationError("不支持的字幕文件：\(parts[0])")
+                }
+                var track = SubtitleTrack(source: .file(url), format: format, isDefault: tracks.isEmpty)
+                if parts.count > 1, !parts[1].isEmpty { track.language = SubtitleLanguages.normalize(parts[1]) }
+                if parts.count > 2 { track.title = parts[2] }
+                tracks.append(track)
+            }
+            subtitles = .init(tracks: tracks, container: format == .mkv ? .mkv : .mp4)
+        }
+        let job = PipelineJob(
+            source: file, range: start.map { CutRange(start: $0, end: end ?? $0) },
+            cutMode: mode == .fast ? .fast : .precise, volume: normalize ? try volume.options() : nil,
+            subtitles: subtitles, outputDirectory: outputDirectory, replaceOriginal: replaceOriginal)
+        let last = LastPercent()
+        let result = try await PipelineExporter().export(job) { p in
+            if let p, last.update(Int(p * 100)) {
+                FileHandle.standardError.write(Data("\r进度 \(Int(p * 100))%".utf8))
+            }
+        }
+        FileHandle.standardError.write(Data("\n".utf8))
+        for note in result.notes { print(note) }
+        print(result.output.map { "输出：\($0.path)" } ?? "没有需要修改的地方，没有生成新文件。")
     }
 }
 

@@ -126,6 +126,8 @@ public enum SubtitlePlanner {
             case base(selector: String)
             /// 已经转成 UTF-8 / 平移过的字幕文件（图形字幕就是原文件）。
             case file(URL)
+            /// 另一个文件里的某条流（一次导出时，原有字幕从原文件取）。
+            case stream(URL, index: Int)
         }
 
         public var track: SubtitleTrack
@@ -155,6 +157,10 @@ public enum SubtitlePlanner {
                 if item.track.format.isText { args += ["-sub_charenc", "UTF-8"] }
                 args += ["-i", url.path]
                 maps.append("\(nextInput):0")
+                nextInput += 1
+            case .stream(let url, let index):
+                args += ["-i", url.path]
+                maps.append("\(nextInput):\(index)")
                 nextInput += 1
             }
         }
@@ -332,28 +338,7 @@ public struct SubtitleExporter: Sendable {
                 converted.format = format
                 muxTracks.append(.init(track: converted, input: .file(extracted)))
             case .file(let url):
-                guard track.format.isText else {
-                    muxTracks.append(.init(track: track, input: .file(url)))
-                    continue
-                }
-                let charset: String
-                if let known = track.charset {
-                    charset = known
-                } else {
-                    charset = try await SubtitleEncoding.detect(url, runner: runner, locator: locator)
-                }
-                // uchardet 没认出来、内容也不是合法的 UTF-8：不猜，直接告诉用户。
-                if SubtitleEncoding.isUnknown(charset), String(data: try Data(contentsOf: url), encoding: .utf8) == nil {
-                    throw SubtitleError.unknownEncoding(url.lastPathComponent)
-                }
-                var text = try await SubtitleEncoding.readUTF8(url, charset: charset, runner: runner, locator: locator)
-                if let timing {
-                    text = SubtitleShifter.shift(text, format: track.format, by: timing.offset, duration: timing.end)
-                }
-                let ext = track.format == .vtt ? "vtt" : track.format.rawValue
-                let prepared = work.appendingPathComponent("track\(i).\(ext)")
-                try Data(text.utf8).write(to: prepared)
-                muxTracks.append(.init(track: track, input: .file(prepared)))
+                muxTracks.append(try await prepareFile(track, url: url, timing: timing, work: work, number: i))
             }
         }
 
@@ -386,6 +371,78 @@ public struct SubtitleExporter: Sendable {
             try? fm.removeItem(at: temp)
             throw error
         }
+    }
+
+    /// 外部字幕文件：文字字幕转成 UTF-8（需要时平移、截尾）写进临时文件；图形字幕直接用原文件。
+    private func prepareFile(
+        _ track: SubtitleTrack, url: URL, timing: (offset: Double, end: Double)?, work: URL, number i: Int
+    ) async throws -> SubtitlePlanner.MuxTrack {
+        guard track.format.isText else { return .init(track: track, input: .file(url)) }
+        let charset: String
+        if let known = track.charset {
+            charset = known
+        } else {
+            charset = try await SubtitleEncoding.detect(url, runner: runner, locator: locator)
+        }
+        // uchardet 没认出来、内容也不是合法的 UTF-8：不猜，直接告诉用户。
+        if SubtitleEncoding.isUnknown(charset), String(data: try Data(contentsOf: url), encoding: .utf8) == nil {
+            throw SubtitleError.unknownEncoding(url.lastPathComponent)
+        }
+        var text = try await SubtitleEncoding.readUTF8(url, charset: charset, runner: runner, locator: locator)
+        if let timing {
+            text = SubtitleShifter.shift(text, format: track.format, by: timing.offset, duration: timing.end)
+        }
+        let ext = track.format == .vtt ? "vtt" : track.format.rawValue
+        let prepared = work.appendingPathComponent("track\(i).\(ext)")
+        try Data(text.utf8).write(to: prepared)
+        return .init(track: track, input: .file(prepared))
+    }
+
+    /// 一次导出用：把字幕封装到已经处理过的 `base`（剪切、统一音量之后的文件）上，写到 `output`。
+    ///
+    /// - 原有字幕轨道从原文件 `original` 取（`base` 里的字幕流不用）；
+    /// - `cut` 不为 nil 时（剪切过），字幕按实际起点平移、对齐 `base` 的第一帧视频，并截到终点；
+    ///   原有的文字字幕先从原文件取出来再平移，原有的图形字幕不能平移（`validate` 已经拒绝）。
+    public func mux(
+        onto base: URL, original: URL, originalInfo: MediaInfo, tracks: [SubtitleTrack], container: SubtitleContainer,
+        cut: (actualStart: Double, end: Double)?, output: URL, work: URL,
+        progress: (@Sendable (Double?) -> Void)? = nil
+    ) async throws {
+        let baseInfo = try await MediaInfo.probe(base, runner: runner, locator: locator)
+        var timing: (offset: Double, end: Double)?
+        if let cut {
+            let v0 = baseInfo.videoStream?.startTime ?? 0
+            timing = (offset: cut.actualStart - v0, end: cut.end - cut.actualStart + v0)
+        }
+        let subtitleOrder = originalInfo.subtitleStreams.map(\.index)
+        var muxTracks: [SubtitlePlanner.MuxTrack] = []
+        for (i, track) in tracks.enumerated() {
+            try Task.checkCancellation()
+            switch track.source {
+            case .embedded(let index):
+                guard let timing, track.format.isText, let k = subtitleOrder.firstIndex(of: index) else {
+                    muxTracks.append(.init(track: track, input: .stream(original, index: index)))
+                    continue
+                }
+                let format = SubtitlePlanner.extractedFormat(for: track.format)
+                let extracted = work.appendingPathComponent("embedded\(i).\(format == .vtt ? "vtt" : format.rawValue)")
+                _ = try await runner.run(try locator.command(.ffmpeg, SubtitlePlanner.extractArguments(
+                    from: original, subtitleIndex: k, format: track.format, output: extracted)))
+                let text = SubtitleShifter.shift(
+                    String(decoding: try Data(contentsOf: extracted), as: UTF8.self),
+                    format: format, by: timing.offset, duration: timing.end)
+                try Data(text.utf8).write(to: extracted)
+                var converted = track
+                converted.format = format
+                muxTracks.append(.init(track: converted, input: .file(extracted)))
+            case .file(let url):
+                muxTracks.append(try await prepareFile(track, url: url, timing: timing, work: work, number: i))
+            }
+        }
+        let args = SubtitlePlanner.muxArguments(
+            base: base, tracks: muxTracks, container: container,
+            videoCodec: baseInfo.videoStream?.codecName, output: output)
+        try await runFFmpeg(args, partial: output, total: baseInfo.bestDuration) { p in progress?(p) }
     }
 
     private func runFFmpeg(
