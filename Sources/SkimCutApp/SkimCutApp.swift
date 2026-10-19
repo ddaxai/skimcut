@@ -49,7 +49,7 @@ struct SkimCutApp: App {
                 Button("清除选区") { model.player?.resetSelection() }
             }
             CommandGroup(after: .windowList) {
-                BatchWindowMenuItem()
+                BatchWindowMenuItem(model: model)
             }
             CommandGroup(after: .toolbar) {
                 Button("放大时间轴") { model.player?.perform(.zoomIn) }
@@ -64,10 +64,10 @@ struct SkimCutApp: App {
             }
         }
 
-        Window("批量统一音量", id: BatchVolumeView.windowID) {
-            BatchVolumeView(batch: model.batch)
+        Window("批量处理", id: BatchWindow.windowID) {
+            BatchWindow(model: model)
         }
-        .defaultSize(width: 980, height: 520)
+        .defaultSize(width: 1000, height: 540)
 
         Settings {
             SettingsView()
@@ -75,13 +75,21 @@ struct SkimCutApp: App {
     }
 }
 
-/// 菜单“窗口 > 批量统一音量…”。
+/// 菜单“窗口 > 批量统一音量… / 批量修改日期…”。
 private struct BatchWindowMenuItem: View {
+    let model: AppModel
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("批量统一音量…") { openWindow(id: BatchVolumeView.windowID) }
+        Button("批量统一音量…") { open(.volume) }
             .keyboardShortcut("b", modifiers: [.command, .shift])
+        Button("批量修改日期…") { open(.dates) }
+            .keyboardShortcut("d", modifiers: [.command, .shift])
+    }
+
+    private func open(_ tab: BatchTab) {
+        model.batchTab = tab
+        openWindow(id: BatchWindow.windowID)
     }
 }
 

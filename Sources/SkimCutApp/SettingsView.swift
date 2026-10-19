@@ -2,7 +2,7 @@ import AppKit
 import SkimCore
 import SwiftUI
 
-/// 设置项的键和读取方法。播放、剪切、字幕、音量相关的设置；其余的在 M6 加入。
+/// 设置项的键和读取方法（AGENTS.md 4.7 的全部设置项：默认输出位置、skimming、默认目标响度、默认剪切模式、默认字幕语言）。
 enum AppSettings {
     static let skimmingEnabledKey = "skimmingEnabled"
     static let skimDwellMillisecondsKey = "skimDwellMilliseconds"

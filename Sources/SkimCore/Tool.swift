@@ -12,6 +12,8 @@ public enum Tool: String, CaseIterable, Sendable, Codable {
     case ffmpegNormalize = "ffmpeg-normalize"
     case exiftool
     case mkvpropedit
+    /// 读 MKV 的全局标签（改描述时要保留其他标签），和 mkvpropedit 同属 MKVToolNix。
+    case mkvextract
     case uchardet
     case iconv
 
@@ -23,7 +25,7 @@ public enum Tool: String, CaseIterable, Sendable, Codable {
         switch self {
         case .ffmpeg, .ffprobe: return ["-hide_banner", "-version"]
         case .exiftool: return ["-ver"]
-        case .ffmpegNormalize, .mkvpropedit, .uchardet, .iconv: return ["--version"]
+        case .ffmpegNormalize, .mkvpropedit, .mkvextract, .uchardet, .iconv: return ["--version"]
         }
     }
 
@@ -34,7 +36,7 @@ public enum Tool: String, CaseIterable, Sendable, Codable {
         case .ffmpeg, .ffprobe: return "brew install ffmpeg"
         case .ffmpegNormalize: return "brew install uv && uv tool install ffmpeg-normalize"
         case .exiftool: return "brew install exiftool"
-        case .mkvpropedit: return "brew install mkvtoolnix"
+        case .mkvpropedit, .mkvextract: return "brew install mkvtoolnix"
         case .uchardet: return "brew install uchardet"
         case .iconv: return "系统自带（/usr/bin/iconv）"
         }
@@ -43,7 +45,7 @@ public enum Tool: String, CaseIterable, Sendable, Codable {
         case .ffmpeg, .ffprobe: return "apt-get install -y ffmpeg"
         case .ffmpegNormalize: return "uv tool install ffmpeg-normalize"
         case .exiftool: return "apt-get install -y libimage-exiftool-perl"
-        case .mkvpropedit: return "apt-get install -y mkvtoolnix"
+        case .mkvpropedit, .mkvextract: return "apt-get install -y mkvtoolnix"
         case .uchardet: return "apt-get install -y uchardet"
         case .iconv: return "系统自带（glibc）"
         }
