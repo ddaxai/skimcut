@@ -215,6 +215,9 @@ struct VolumePanel: View {
             }
             if let error = volume.auditionError {
                 Text(error).foregroundStyle(.red).lineLimit(1)
+                if let log = volume.auditionLog {
+                    Button("复制完整命令和日志") { AppModel.copyToPasteboard(log) }
+                }
             }
             Spacer(minLength: 8)
             Button("生成 \(volume.source.deletingPathExtension().lastPathComponent)_norm") {

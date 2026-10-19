@@ -25,6 +25,8 @@ final class AppModel {
     private(set) var volume: VolumeController?
     /// 当前视频的信息面板状态。
     private(set) var info: InfoController?
+    /// 当前视频的一次导出选项。
+    private(set) var exportAllOptions: ExportAllController?
     /// 批量处理窗口：统一音量、修改日期。
     let batch: BatchVolumeController
     let batchDates: BatchDatesController
@@ -124,6 +126,7 @@ final class AppModel {
         cut = nil
         subtitles = nil
         info = nil
+        exportAllOptions = nil
         loadState = .idle
     }
 
@@ -252,6 +255,7 @@ final class AppModel {
             inspection: inspection, backingScale: scale)
         cut = CutController(source: source)
         subtitles = SubtitleController(source: source)
+        exportAllOptions = ExportAllController()
         let info = InfoController(source: source)
         info.onFileChanged = { [weak self] url, message in self?.metadataChanged(url, result: message) }
         if let pending = pendingInfoResult, pending.url == source { info.showResult(pending.message) }
@@ -379,6 +383,46 @@ final class AppModel {
         pendingBatchWindow = true
     }
 
+    // MARK: - 一次导出
+
+    /// 剪切 → 统一音量 → 加字幕 → 复制元数据，进任务队列。选了“替换原文件”时，完成后原文件移到废纸篓。
+    func exportAll(_ job: PipelineJob) {
+        var steps: [String] = []
+        if let r = job.range { steps.append("剪切 \(Timecode.format(r.start)) – \(Timecode.format(r.end))") }
+        if job.volume != nil { steps.append("统一音量") }
+        if job.subtitles != nil { steps.append("字幕") }
+        let title = "一次导出 \(job.source.lastPathComponent)（\(steps.joined(separator: " + "))）"
+        let exporter = PipelineExporter()
+        let queue = self.queue
+        Task { @MainActor [weak self] in
+            let id = await queue.enqueue(title: title) { [weak self] context in
+                let model = self
+                let result = try await exporter.export(job) { progress in
+                    context.report(progress: progress)
+                }
+                var notes = result.notes
+                if result.output == nil { notes.append("没有需要修改的地方，没有生成新文件。") }
+                await model?.exportPlanned(id: context.id, output: result.output, note: notes.joined(separator: "\n"))
+                if result.replacedOriginal, let output = result.output {
+                    await model?.originalReplaced(job.source, by: output)
+                }
+            }
+            guard let self else { return }
+            if !self.exports.contains(where: { $0.id == id }) {
+                self.exports.append(ExportRecord(id: id, title: title))
+            }
+        }
+    }
+
+    /// 原文件已经移到废纸篓、新文件用了它的名字：正在播放原文件时，改为打开新文件（回到原来的位置）。
+    private func originalReplaced(_ original: URL, by newFile: URL) {
+        guard let player, player.sourceURL.standardizedFileURL == original.standardizedFileURL else { return }
+        pendingPlayhead = (newFile, player.playhead)
+        let tab = bottomPanel
+        open(newFile)
+        bottomPanel = tab
+    }
+
     // MARK: - 信息与日期
 
     /// 原文件的元数据被修改了。ExifTool / mkvpropedit 是原地修改，播放器手里的采样位置可能已经不对，
@@ -494,6 +538,7 @@ enum BottomPanel: String, CaseIterable, Identifiable {
     case subtitles
     case volume
     case info
+    case exportAll
 
     var id: String { rawValue }
 
@@ -503,6 +548,7 @@ enum BottomPanel: String, CaseIterable, Identifiable {
         case .subtitles: return "字幕"
         case .volume: return "音量"
         case .info: return "信息"
+        case .exportAll: return "一次导出"
         }
     }
 }
