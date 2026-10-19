@@ -71,7 +71,7 @@ struct PlayerScreen: View {
     }
 }
 
-/// 时间轴下面的面板：剪切 / 字幕。
+/// 时间轴下面的面板：剪切 / 字幕 / 音量 / 信息 / 一次导出。
 struct BottomPanelSwitcher: View {
     let player: PlayerController
     let cut: CutController?
@@ -110,6 +110,11 @@ struct BottomPanelSwitcher: View {
             case .info:
                 if let info = model.info {
                     InfoPanel(info: info, model: model)
+                }
+            case .exportAll:
+                if let cut, let volume = model.volume, let subtitles = model.subtitles, let options = model.exportAllOptions {
+                    ExportAllPanel(
+                        player: player, cut: cut, volume: volume, subtitles: subtitles, options: options, model: model)
                 }
             }
         }
