@@ -23,10 +23,20 @@ final class AppModel {
     private(set) var subtitles: SubtitleController?
     /// 当前视频的音量面板状态。
     private(set) var volume: VolumeController?
-    /// 批量统一音量窗口的状态。
+    /// 当前视频的信息面板状态。
+    private(set) var info: InfoController?
+    /// 当前视频的一次导出选项。
+    private(set) var exportAllOptions: ExportAllController?
+    /// 批量处理窗口：统一音量、修改日期。
     let batch: BatchVolumeController
-    /// 请求打开批量统一音量窗口（窗口由界面打开）。
+    let batchDates: BatchDatesController
+    var batchTab: BatchTab = .volume
+    /// 请求打开批量处理窗口（窗口由界面打开）。
     var pendingBatchWindow = false
+    /// 重新打开视频后要回到的播放头位置。
+    @ObservationIgnored private var pendingPlayhead: (url: URL, time: Double)?
+    /// 重新打开视频后在信息面板里显示的结果。
+    @ObservationIgnored private var pendingInfoResult: (url: URL, message: String)?
     /// 时间轴下面显示哪个面板。
     var bottomPanel: BottomPanel = .cut
     /// 导出记录（任务的进度和状态来自 `jobs`）。
@@ -57,6 +67,8 @@ final class AppModel {
         self.queue = queue
         self.analysisQueue = analysisQueue
         self.batch = BatchVolumeController(queue: queue, analysisQueue: analysisQueue)
+        self.batchDates = BatchDatesController()
+        batchDates.onFileChanged = { [weak self] url in self?.metadataChanged(url) }
         queueObserver = Task { @MainActor [weak self] in
             // 只在任务状态变化时被唤醒，没有轮询。
             for await jobs in await queue.updates() {
@@ -113,6 +125,8 @@ final class AppModel {
         player = nil
         cut = nil
         subtitles = nil
+        info = nil
+        exportAllOptions = nil
         loadState = .idle
     }
 
@@ -241,7 +255,17 @@ final class AppModel {
             inspection: inspection, backingScale: scale)
         cut = CutController(source: source)
         subtitles = SubtitleController(source: source)
+        exportAllOptions = ExportAllController()
+        let info = InfoController(source: source)
+        info.onFileChanged = { [weak self] url, message in self?.metadataChanged(url, result: message) }
+        if let pending = pendingInfoResult, pending.url == source { info.showResult(pending.message) }
+        pendingInfoResult = nil
+        self.info = info
         if let player {
+            if let pending = pendingPlayhead, pending.url == source {
+                player.movePlayhead(to: pending.time)
+            }
+            pendingPlayhead = nil
             let volume = VolumeController(
                 source: source, duration: player.duration, player: player,
                 analysisQueue: analysisQueue, previewStore: previewStore)
@@ -345,10 +369,74 @@ final class AppModel {
         }
     }
 
-    /// 打开批量统一音量窗口，并加入这些视频。
+    /// 打开批量处理窗口，并把这些视频加入当前页面的列表。
     func addToBatch(_ urls: [URL]) {
-        batch.add(urls)
+        switch batchTab {
+        case .volume: batch.add(urls)
+        case .dates: batchDates.add(urls)
+        }
         pendingBatchWindow = true
+    }
+
+    func openBatchWindow(_ tab: BatchTab) {
+        batchTab = tab
+        pendingBatchWindow = true
+    }
+
+    // MARK: - 一次导出
+
+    /// 剪切 → 统一音量 → 加字幕 → 复制元数据，进任务队列。选了“替换原文件”时，完成后原文件移到废纸篓。
+    func exportAll(_ job: PipelineJob) {
+        var steps: [String] = []
+        if let r = job.range { steps.append("剪切 \(Timecode.format(r.start)) – \(Timecode.format(r.end))") }
+        if job.volume != nil { steps.append("统一音量") }
+        if job.subtitles != nil { steps.append("字幕") }
+        let title = "一次导出 \(job.source.lastPathComponent)（\(steps.joined(separator: " + "))）"
+        let exporter = PipelineExporter()
+        let queue = self.queue
+        Task { @MainActor [weak self] in
+            let id = await queue.enqueue(title: title) { [weak self] context in
+                let model = self
+                let result = try await exporter.export(job) { progress in
+                    context.report(progress: progress)
+                }
+                var notes = result.notes
+                if result.output == nil { notes.append("没有需要修改的地方，没有生成新文件。") }
+                await model?.exportPlanned(id: context.id, output: result.output, note: notes.joined(separator: "\n"))
+                if result.replacedOriginal, let output = result.output {
+                    await model?.originalReplaced(job.source, by: output)
+                }
+            }
+            guard let self else { return }
+            if !self.exports.contains(where: { $0.id == id }) {
+                self.exports.append(ExportRecord(id: id, title: title))
+            }
+        }
+    }
+
+    /// 原文件已经移到废纸篓、新文件用了它的名字：正在播放原文件时，改为打开新文件（回到原来的位置）。
+    private func originalReplaced(_ original: URL, by newFile: URL) {
+        guard let player, player.sourceURL.standardizedFileURL == original.standardizedFileURL else { return }
+        pendingPlayhead = (newFile, player.playhead)
+        let tab = bottomPanel
+        open(newFile)
+        bottomPanel = tab
+    }
+
+    // MARK: - 信息与日期
+
+    /// 原文件的元数据被修改了。ExifTool / mkvpropedit 是原地修改，播放器手里的采样位置可能已经不对，
+    /// 所以正在直接播放这个文件时重新打开（回到原来的播放头位置）。播放的是预览临时文件时不受影响。
+    func metadataChanged(_ url: URL, result: String? = nil) {
+        guard let player, player.sourceURL.standardizedFileURL == url.standardizedFileURL,
+              player.playbackURL == player.sourceURL
+        else { return }
+        let source = player.sourceURL
+        pendingPlayhead = (source, player.playhead)
+        if let result { pendingInfoResult = (source, result) }
+        let tab = bottomPanel
+        open(source)
+        bottomPanel = tab
     }
 
     /// 从 Dock 或 Finder 打开的文件：一个视频直接打开，多个视频放进批量统一音量窗口。
@@ -449,6 +537,8 @@ enum BottomPanel: String, CaseIterable, Identifiable {
     case cut
     case subtitles
     case volume
+    case info
+    case exportAll
 
     var id: String { rawValue }
 
@@ -457,6 +547,8 @@ enum BottomPanel: String, CaseIterable, Identifiable {
         case .cut: return "剪切"
         case .subtitles: return "字幕"
         case .volume: return "音量"
+        case .info: return "信息"
+        case .exportAll: return "一次导出"
         }
     }
 }

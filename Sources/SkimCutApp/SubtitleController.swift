@@ -108,6 +108,12 @@ final class SubtitleController {
         tracks[i].language = code
     }
 
+    /// 手动指定编码（自动检测认错时用）。
+    func setCharset(_ id: UUID, _ charset: String) {
+        guard let i = tracks.firstIndex(where: { $0.id == id }) else { return }
+        tracks[i].charset = charset
+    }
+
     func setTitle(_ id: UUID, _ title: String) {
         guard let i = tracks.firstIndex(where: { $0.id == id }) else { return }
         tracks[i].title = title
@@ -115,15 +121,27 @@ final class SubtitleController {
 
     func isDetecting(_ id: UUID) -> Bool { detecting.contains(id) }
 
-    /// 生成用的请求；语言统一规范化。
-    func job(range: CutRange?) -> SubtitleJob {
-        let normalized = tracks.map { t -> SubtitleTrack in
+    /// 语言统一规范化之后的轨道。
+    private var normalizedTracks: [SubtitleTrack] {
+        tracks.map { t -> SubtitleTrack in
             var t = t
             t.language = SubtitleLanguages.normalize(t.language)
             return t
         }
-        return SubtitleJob(
-            source: source, tracks: normalized, container: container,
+    }
+
+    /// 一次导出用的字幕。
+    var pipelineSubtitles: PipelineJob.Subtitles {
+        PipelineJob.Subtitles(tracks: normalizedTracks, container: container)
+    }
+
+    /// 还在读取原有轨道或检测编码。
+    var isBusy: Bool { isLoadingEmbedded || !detecting.isEmpty }
+
+    /// 生成用的请求；语言统一规范化。
+    func job(range: CutRange?) -> SubtitleJob {
+        SubtitleJob(
+            source: source, tracks: normalizedTracks, container: container,
             range: cutToSelection ? range : nil, outputDirectory: AppSettings.outputDirectory,
             copyMetadata: true, shiftRecordingDate: AppSettings.shiftRecordingDate)
     }

@@ -43,6 +43,7 @@ final class VolumeController {
     private(set) var audition: Audition = .idle
     private(set) var auditionProgress: Double?
     private(set) var auditionError: String?
+    private(set) var auditionLog: String?
     /// 试听时听处理后的声音（false：原声）。
     var hearsProcessed = true {
         didSet { applyMute() }
@@ -199,6 +200,7 @@ final class VolumeController {
         guard let analysis, player != nil else { return }
         stopAudition(pausePlayer: true)
         auditionError = nil
+        auditionLog = nil
         let start = min(max(t, 0), max(duration - 1, 0))
         let length = min(VolumeAuditioner.defaultDuration, duration - start)
         let key = AuditionKey(start: start, options: options)
@@ -296,8 +298,9 @@ final class VolumeController {
 
     private func auditionFailed(_ error: Error) {
         guard case .preparing = audition else { return }
-        if case .failed(let message, _) = JobStatus.outcome(for: error) {
+        if case .failed(let message, let log) = JobStatus.outcome(for: error) {
             auditionError = "试听生成失败：" + message
+            auditionLog = log
         }
         audition = .idle
         auditionProgress = nil
