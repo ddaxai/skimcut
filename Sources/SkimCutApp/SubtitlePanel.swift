@@ -155,6 +155,21 @@ private struct TrackRow: View {
             .buttonStyle(.borderless)
             .fixedSize()
 
+            if track.format.isText, !track.isEmbedded {
+                Menu {
+                    ForEach(SubtitleEncoding.choices, id: \.code) { choice in
+                        Button(choice.name) { subtitles.setCharset(track.id, choice.code) }
+                    }
+                } label: {
+                    Image(systemName: "textformat")
+                }
+                .menuStyle(.button)
+                .buttonStyle(.borderless)
+                .fixedSize()
+                .help("字幕显示成乱码时，在这里手动选择编码（自动检测：\(SubtitleEncoding.displayName(track.charset ?? "")）)")
+                .disabled(detecting)
+            }
+
             TextField("标题（可选）", text: $title)
                 .textFieldStyle(.roundedBorder)
                 .frame(minWidth: 120)

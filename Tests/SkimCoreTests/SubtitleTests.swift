@@ -322,4 +322,15 @@ final class SubtitlePlannerTests: XCTestCase {
         XCTAssertEqual(track?.isDefault, true)
         XCTAssertNil(SubtitleTrack.embedded(MediaStream(index: 0, codecType: "video", codecName: "h264")))
     }
+
+    func testEncodingFallbackHelpers() {
+        XCTAssertTrue(SubtitleEncoding.isSingleByteLegacy("WINDOWS-1256"))
+        XCTAssertTrue(SubtitleEncoding.isSingleByteLegacy("ISO-8859-1"))
+        XCTAssertFalse(SubtitleEncoding.isSingleByteLegacy("GB18030"))
+        XCTAssertFalse(SubtitleEncoding.isSingleByteLegacy("UTF-8"))
+        XCTAssertEqual(SubtitleEncoding.chineseRatio("第一句 test，第二句"), 1)
+        XCTAssertEqual(SubtitleEncoding.chineseRatio("plain ascii"), 0)
+        XCTAssertLessThan(SubtitleEncoding.chineseRatio("µع¶‏¾ن test"), 0.5)
+        XCTAssertTrue(SubtitleEncoding.choices.contains { $0.code == "GB18030" })
+    }
 }

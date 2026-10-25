@@ -286,3 +286,39 @@ final class SubtitleIntegrationTests: XCTestCase {
         XCTAssertEqual(left, ["h264_gop4_subs.mp4", "h264_gop4_subs_2.mp4"], "没有留下临时文件")
     }
 }
+
+/// 用户实测：内容很少的 GBK 字幕被 uchardet 认成 WINDOWS-1256，导出后乱码。
+final class SubtitleEncodingFallbackTests: XCTestCase {
+    let runner = ToolRunner(registry: ProcessRegistry())
+
+    private func write(_ text: String, as charset: String, name: String, in dir: URL) async throws -> URL {
+        let utf8 = dir.appendingPathComponent(name + ".utf8")
+        try Data(text.utf8).write(to: utf8)
+        let out = dir.appendingPathComponent(name)
+        let result = try await runner.run(try ToolLocator.shared.command(.iconv, ["-f", "UTF-8", "-t", charset, utf8.path]))
+        try result.stdout.write(to: out)
+        return out
+    }
+
+    func testShortGBKIsReadAsGB18030ButOtherScriptsAreNot() async throws {
+        _ = try TestSupport.requireTool(.uchardet)
+        _ = try TestSupport.requireTool(.iconv)
+        let dir = try TestSupport.makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let chinese = "1\n00:00:01,000 --> 00:00:04,000\n第一句 test\n\n2\n00:00:06,000 --> 00:00:09,000\n第二句 test\n"
+        let gbk = try await write(chinese, as: "GB18030", name: "short_gbk.srt", in: dir)
+        let charset = try await SubtitleEncoding.detect(gbk, runner: runner)
+        XCTAssertEqual(charset, "GB18030")
+        let text = try await SubtitleEncoding.readUTF8(gbk, charset: charset, runner: runner)
+        XCTAssertTrue(text.contains("第一句 test") && text.contains("第二句 test"), text)
+
+        // 真的阿拉伯文、俄文字幕不会被改成 GB18030。
+        let arabic = try await write("1\n00:00:01,000 --> 00:00:04,000\nمرحبا بالعالم هذا اختبار\n", as: "WINDOWS-1256", name: "ar.srt", in: dir)
+        let arabicCharset = try await SubtitleEncoding.detect(arabic, runner: runner)
+        XCTAssertNotEqual(arabicCharset, "GB18030")
+        let russian = try await write("1\n00:00:01,000 --> 00:00:04,000\nПривет мир это тест\n", as: "WINDOWS-1251", name: "ru.srt", in: dir)
+        let russianCharset = try await SubtitleEncoding.detect(russian, runner: runner)
+        XCTAssertNotEqual(russianCharset, "GB18030")
+    }
+}

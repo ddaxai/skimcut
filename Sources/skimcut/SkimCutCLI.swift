@@ -285,6 +285,9 @@ struct Subs: AsyncParsableCommand {
     @Flag(name: .customLong("drop-existing"), help: "去掉源视频里已有的字幕轨道（默认保留）。")
     var dropExisting = false
 
+    @Option(help: "字幕文件的编码，例如 GB18030、BIG5、UTF-8（不给就自动检测）。")
+    var encoding: String?
+
     @Option(help: "同时只导出这一段（快速剪切），起点。", transform: parseTime)
     var start: Double?
 
@@ -311,7 +314,11 @@ struct Subs: AsyncParsableCommand {
             if parts.count > 1, !parts[1].isEmpty { track.language = SubtitleLanguages.normalize(parts[1]) }
             if parts.count > 2 { track.title = parts[2] }
             if format.isText {
-                track.charset = try await SubtitleEncoding.detect(url)
+                if let encoding {
+                    track.charset = encoding.uppercased()
+                } else {
+                    track.charset = try await SubtitleEncoding.detect(url)
+                }
                 print("\(url.lastPathComponent)：\(SubtitleEncoding.displayName(track.charset ?? ""))")
             }
             tracks.append(track)
@@ -636,6 +643,9 @@ struct Export: AsyncParsableCommand {
     @Flag(name: .customLong("keep-subs"), help: "处理字幕时保留源视频里已有的字幕轨道。")
     var keepSubs = false
 
+    @Option(help: "字幕文件的编码，例如 GB18030、BIG5、UTF-8（不给就自动检测）。")
+    var encoding: String?
+
     @Option(help: "有字幕时的输出格式：mp4 或 mkv。")
     var format: FormatOption = .mp4
 
@@ -661,6 +671,7 @@ struct Export: AsyncParsableCommand {
                     throw ValidationError("不支持的字幕文件：\(parts[0])")
                 }
                 var track = SubtitleTrack(source: .file(url), format: format, isDefault: tracks.isEmpty)
+                track.charset = encoding?.uppercased()
                 if parts.count > 1, !parts[1].isEmpty { track.language = SubtitleLanguages.normalize(parts[1]) }
                 if parts.count > 2 { track.title = parts[2] }
                 tracks.append(track)

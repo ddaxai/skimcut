@@ -108,6 +108,12 @@ final class SubtitleController {
         tracks[i].language = code
     }
 
+    /// 手动指定编码（自动检测认错时用）。
+    func setCharset(_ id: UUID, _ charset: String) {
+        guard let i = tracks.firstIndex(where: { $0.id == id }) else { return }
+        tracks[i].charset = charset
+    }
+
     func setTitle(_ id: UUID, _ title: String) {
         guard let i = tracks.firstIndex(where: { $0.id == id }) else { return }
         tracks[i].title = title
