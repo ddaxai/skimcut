@@ -69,10 +69,15 @@ final class MetadataIntegrationTests: XCTestCase {
             let m = try await read(url)
             XCTAssertEqual(m.recordingDate?.exifToolString, "2026:10:09 14:00:00+08:00", name)
             XCTAssertTrue(m.recordingDateHasTimeZone)
-            XCTAssertEqual(m.entries.first { $0.id == "QuickTime:CreateDate" }?.value, "2026:10:09 06:00:00+00:00", "UTC")
+            // ExifTool 按这台电脑的时区显示 UTC 字段（同一个时刻，写法不同），所以比较时间点，不比较字符串。
+            func sameInstant(_ value: String?) -> Bool {
+                value.flatMap { QuickTimeDate.parse($0) }.map { abs($0.date.timeIntervalSince(date.date)) < 1 } ?? false
+            }
+            let create = m.entries.first { $0.id == "QuickTime:CreateDate" }?.value
+            XCTAssertTrue(sameInstant(create), "QuickTime:CreateDate = \(create ?? "nil")")
             let trackDates = m.entries.filter { $0.family.hasPrefix("Track") && $0.tag.hasSuffix("Date") }
             XCTAssertEqual(trackDates.count, 8, "两条轨道 × Track/Media × Create/Modify")
-            XCTAssertTrue(trackDates.allSatisfy { $0.value == "2026:10:09 06:00:00+00:00" }, "\(trackDates)")
+            XCTAssertTrue(trackDates.allSatisfy { sameInstant($0.value) }, "\(trackDates)")
             XCTAssertEqual(try XCTUnwrap(m.fileDates.modification).timeIntervalSince(date.date), 0, accuracy: 1)
             if FileDates.canWriteCreation {
                 XCTAssertEqual(try XCTUnwrap(m.fileDates.creation).timeIntervalSince(date.date), 0, accuracy: 1)
