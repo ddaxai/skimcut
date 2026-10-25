@@ -166,7 +166,7 @@ private struct TrackRow: View {
                 .menuStyle(.button)
                 .buttonStyle(.borderless)
                 .fixedSize()
-                .help("字幕显示成乱码时，在这里手动选择编码（自动检测：\(SubtitleEncoding.displayName(track.charset ?? "")）)")
+                .help("字幕显示成乱码时，在这里手动选择编码（自动检测：\(SubtitleEncoding.displayName(track.charset ?? ""))）")
                 .disabled(detecting)
             }
 
