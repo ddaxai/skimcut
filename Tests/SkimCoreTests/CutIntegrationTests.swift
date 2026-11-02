@@ -57,7 +57,8 @@ final class CutIntegrationTests: XCTestCase {
 
     // MARK: - 快速模式
 
-    func testFastCutStartsAtPreviousKeyframeWithoutReencoding() async throws {
+    /// 无损快剪（MP4）：不重新编码，用编辑列表让开头精确到帧（和 QuickTime 的修剪一样）。
+    func testFastCutToMP4IsFrameAccurateWithoutReencoding() async throws {
         let media = try TestSupport.testMedia()
         _ = try TestSupport.requireTool(.exiftool)
         let dir = try TestSupport.makeTempDir()
@@ -70,10 +71,10 @@ final class CutIntegrationTests: XCTestCase {
         let exporter = CutExporter(runner: runner, encoder: .software(lossless: false))
         let plan = try await exporter.plan(
             source: source, info: info, range: CutRange(start: 5, end: 7), options: CutOptions(mode: .fast))
-        XCTAssertEqual(plan.actualStart, 4, accuracy: 0.001, "关键帧每 4 秒一个")
-        XCTAssertEqual(plan.leadIn, 1, accuracy: 0.001)
+        XCTAssertEqual(plan.actualStart, 5, "MP4：开头精确到帧（5 秒不是关键帧，关键帧在 4 秒）")
+        XCTAssertEqual(plan.leadIn, 0)
         XCTAssertEqual(plan.output.lastPathComponent, "源 'a' \"b\"_cut_00m05.000s-00m07.000s.mp4")
-        XCTAssertEqual(plan.leadInMessage, "实际起点会提前 1.000 秒（从 00:00:04.000 开始，那里是最近的关键帧）。")
+        XCTAssertEqual(plan.leadInMessage, "不重新编码，开头精确到帧。")
 
         let progress = LockedBox<[Double]>([])
         let result = try await exporter.export(plan) { p in if let p { progress.mutate { $0.append(p) } } }
@@ -83,12 +84,18 @@ final class CutIntegrationTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(out.videoStream?.codecName), "h264")
         XCTAssertEqual(out.audioStreams.first?.codecName, "aac")
 
-        // 视频没有重新编码：输出的包就是源文件从第 4 秒（第 120 帧）开始的那些包。
+        // 视频没有重新编码：输出的包是源文件里连续的一段包（从 4 秒的关键帧开始复制）。
         let src = try await packetHashes(source)
         let cut = try await packetHashes(result.output)
-        // 4.0–7.0 秒是 90 帧；复制模式按解码顺序截断，有 B 帧时终点会多带 1–3 帧。
-        XCTAssertTrue((90...93).contains(cut.count), "帧数 \(cut.count)")
-        XCTAssertEqual(cut, Array(src[120..<(120 + cut.count)]))
+        let first = try XCTUnwrap(src.firstIndex(of: try XCTUnwrap(cut.first)))
+        XCTAssertEqual(cut, Array(src[first..<(first + cut.count)]))
+
+        // 播放时（解码时）第一帧就是源文件 5.0 秒那一帧，时长约 2 秒。
+        let decoded = try await frameHashes(result.output)
+        let sourceFrames = try await frameHashes(source)
+        XCTAssertEqual(decoded.first, sourceFrames[150], "第 150 帧 = 5.0 秒")
+        // 5.0–7.0 秒是 60 帧；复制模式按解码顺序截断，有 B 帧时终点会多带几帧。
+        XCTAssertTrue((60...64).contains(decoded.count), "帧数 \(decoded.count)")
 
         // 原文件没有被修改。
         let original = try await packetHashes(media.appendingPathComponent("h264_gop4.mp4"))
@@ -108,11 +115,31 @@ final class CutIntegrationTests: XCTestCase {
         XCTAssertEqual(plan.output.pathExtension, "mp4")
         XCTAssertEqual(plan.output.deletingLastPathComponent().standardizedFileURL, dir.standardizedFileURL)
         XCTAssertFalse(plan.copiesMetadata, "MKV 源不复制元数据（ExifTool 只写 MP4/MOV）")
-        XCTAssertEqual(plan.actualStart, 2, accuracy: 0.03, "sample.mkv 每 2 秒一个关键帧")
+        XCTAssertEqual(plan.actualStart, 2.5, "输出 MP4：开头精确到帧")
         let result = try await exporter.export(plan)
         let out = try await probe(result.output)
         XCTAssertTrue(out.isQuickTimeFamily)
-        XCTAssertEqual(try XCTUnwrap(out.bestDuration), 3, accuracy: 0.25, "2.0–5.0 秒，终点可能多几帧")
+        XCTAssertEqual(try XCTUnwrap(out.bestDuration), 2.5, accuracy: 0.25, "2.5–5.0 秒，终点可能多几帧")
+    }
+
+    /// 输出不是 MP4/MOV（例如 Opus 音频只能放 MKV）时，快速模式仍然从起点之前的关键帧开始。
+    func testFastCutToMKVStartsAtKeyframe() async throws {
+        let media = try TestSupport.testMedia()
+        let dir = try TestSupport.makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = dir.appendingPathComponent("opus.mkv")
+        _ = try await runner.run(try ToolLocator.shared.command(.ffmpeg, [
+            "-hide_banner", "-nostdin", "-v", "error", "-i", media.appendingPathComponent("h264_gop4.mp4").path,
+            "-c:v", "copy", "-c:a", "libopus", source.path,
+        ]))
+        let info = try await probe(source)
+        let exporter = CutExporter(runner: runner)
+        let plan = try await exporter.plan(
+            source: source, info: info, range: CutRange(start: 5, end: 7), options: CutOptions(mode: .fast, outputDirectory: dir))
+        XCTAssertEqual(plan.output.pathExtension, "mkv")
+        XCTAssertEqual(plan.actualStart, 4, accuracy: 0.05, "关键帧每 4 秒一个")
+        XCTAssertEqual(plan.leadIn, 1, accuracy: 0.05)
+        _ = try await exporter.export(plan)
     }
 
     // MARK: - 精确模式（M2 验收）
@@ -228,11 +255,11 @@ final class CutIntegrationTests: XCTestCase {
         let preciseInfo = try await probe(precise.output)
         XCTAssertEqual(try XCTUnwrap(preciseInfo.bestDuration), 1, accuracy: 0.1)
 
-        // 快速模式：按实际起点（关键帧 4 秒）平移。
+        // 无损快剪（MP4，开头精确到帧）：按起点 5 秒平移。
         let fast = try await exporter.export(try await exporter.plan(
             source: source, info: info, range: CutRange(start: 5, end: 6), options: CutOptions(mode: .fast)))
         let fastDates = try await MetadataCopier(runner: runner).readDates(fast.output)
-        XCTAssertEqual(fastDates.keysCreationDate?.exifToolString, "2026:10:09 14:00:04+08:00")
+        XCTAssertEqual(fastDates.keysCreationDate?.exifToolString, "2026:10:09 14:00:05+08:00")
 
         // 关掉平移：和源文件相同。
         let same = try await exporter.export(try await exporter.plan(

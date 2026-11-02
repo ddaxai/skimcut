@@ -2,15 +2,16 @@ import Foundation
 
 /// 剪切模式。
 public enum CutMode: String, Sendable, Equatable, CaseIterable, Codable {
-    /// `-c copy`：不重新编码，起点会提前到关键帧。
+    /// `-c copy`：不重新编码。输出 MP4/MOV 时用编辑列表让开头精确到帧（和 QuickTime 的修剪一样），
+    /// 其他格式起点会提前到关键帧。
     case fast
     /// 重新编码，起点和终点精确到帧。
     case precise
 
     public var displayName: String {
         switch self {
-        case .fast: return "快速（无损）"
-        case .precise: return "精确"
+        case .fast: return "无损快剪"
+        case .precise: return "精确（重新编码）"
         }
     }
 }
@@ -115,17 +116,26 @@ public enum CutPlanner {
         }
     }
 
-    // MARK: - 快速模式
+    // MARK: - 快速模式（无损快剪）
 
-    /// `ffmpeg -ss S -i in -t D -map 0:v:0 -map 0:a? -c copy -avoid_negative_ts make_zero -movflags +faststart out`
+    /// 输出是 MP4/MOV 时，快速模式的开头也精确到帧：从起点之前的关键帧开始复制，但用编辑列表
+    /// 把起点之前的几帧藏起来（和 QuickTime 的“修剪”一样，不重新编码）。
+    /// 已验证：剪出来的第一帧和原视频起点那一帧完全相同（framemd5）。
+    public static func keepsExactStart(outputExtension ext: String) -> Bool {
+        ["mp4", "mov", "m4v"].contains(ext.lowercased())
+    }
+
+    /// `ffmpeg -ss S -i in -t D -map 0:v:0 -map 0:a? -c copy [-avoid_negative_ts make_zero] -movflags +faststart out`
     ///
-    /// 输出从起点之前最近的关键帧开始，到终点结束。`-n`：输出已存在时失败，绝不覆盖。
+    /// MP4/MOV：不加 `-avoid_negative_ts make_zero`，起点之前的几帧时间是负的，ffmpeg 写成编辑列表，
+    /// 播放从起点开始。其他格式：从起点之前最近的关键帧开始。`-n`：输出已存在时失败，绝不覆盖。
     public static func fastArguments(input: URL, output: URL, range: CutRange, info: MediaInfo) -> [String] {
         let ext = output.pathExtension.lowercased()
         var args = ["-hide_banner", "-nostdin", "-n"] + FFmpegProgress.arguments
         args += ["-ss", seconds(range.start), "-i", input.path, "-t", seconds(range.duration)]
-        args += ["-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-avoid_negative_ts", "make_zero"]
-        if ext == "mp4" || ext == "mov" || ext == "m4v" {
+        args += ["-map", "0:v:0", "-map", "0:a?", "-c", "copy"]
+        if !keepsExactStart(outputExtension: ext) { args += ["-avoid_negative_ts", "make_zero"] }
+        if keepsExactStart(outputExtension: ext) {
             if info.videoStream?.codecName == "hevc" { args += ["-tag:v", "hvc1"] }
             args += ["-movflags", "+faststart"]
         }

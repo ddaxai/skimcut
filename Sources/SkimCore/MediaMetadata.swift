@@ -62,10 +62,13 @@ public struct FileDates: Sendable, Equatable {
     /// 创建日期（只有 macOS 能改；Linux 上可能读不到）。
     public var creation: Date?
     public var modification: Date?
+    /// 添加日期（访达里的“添加日期”，文件放进这个文件夹的时间）：只能看，App 改不了。只有 macOS 有。
+    public var added: Date?
 
-    public init(creation: Date? = nil, modification: Date? = nil) {
+    public init(creation: Date? = nil, modification: Date? = nil, added: Date? = nil) {
         self.creation = creation
         self.modification = modification
+        self.added = added
     }
 
     /// 两个里较早的一个（从相机导入时，修改日期常常保留了真实的录制时间，创建日期是导入的时间）。
@@ -75,7 +78,11 @@ public struct FileDates: Sendable, Equatable {
 
     public static func read(_ url: URL) throws -> FileDates {
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-        return FileDates(creation: attrs[.creationDate] as? Date, modification: attrs[.modificationDate] as? Date)
+        var added: Date?
+        #if os(macOS)
+        added = try? url.resourceValues(forKeys: [.addedToDirectoryDateKey]).addedToDirectoryDate
+        #endif
+        return FileDates(creation: attrs[.creationDate] as? Date, modification: attrs[.modificationDate] as? Date, added: added)
     }
 
     /// 设置（nil 的不改）。创建日期只在 macOS 上能改，其他系统上忽略。
@@ -230,5 +237,56 @@ public enum MetadataReader {
             recordingDate: recording?.0, recordingDateHasTimeZone: recording?.1 ?? false,
             title: first(entries, titleKeys), description: description,
             fileDates: (try? FileDates.read(url)) ?? FileDates())
+    }
+}
+
+/// 信息页面上显示的几项：分辨率、画质、大小、时长。
+public struct VideoSummary: Sendable, Equatable {
+    public var width: Int?
+    public var height: Int?
+    public var duration: Double?
+    public var fileSize: Int64?
+
+    public init(width: Int? = nil, height: Int? = nil, duration: Double? = nil, fileSize: Int64? = nil) {
+        self.width = width
+        self.height = height
+        self.duration = duration
+        self.fileSize = fileSize
+    }
+
+    public init(info: MediaInfo, url: URL) {
+        let video = info.videoStream
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value
+        self.init(width: video?.width, height: video?.height, duration: info.bestDuration, fileSize: size)
+    }
+
+    /// `1920 × 1080`
+    public var resolution: String? {
+        guard let width, let height else { return nil }
+        return "\(width) × \(height)"
+    }
+
+    /// 画质：按短边算（竖着拍的 1080 × 1920 也是 1080p）。
+    public var quality: String? {
+        guard let width, let height else { return nil }
+        return Self.qualityLabel(width: width, height: height)
+    }
+
+    public static func qualityLabel(width: Int, height: Int) -> String {
+        let short = min(width, height)
+        switch short {
+        case 4320...: return "8K"
+        case 2160...: return "4K"
+        case 1440...: return "2K（1440p）"
+        case 1080...: return "1080p"
+        case 720...: return "720p"
+        case 480...: return "480p"
+        default: return "\(short)p"
+        }
+    }
+
+    /// 例如 `1.2 GB`
+    public var sizeText: String? {
+        fileSize.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
     }
 }

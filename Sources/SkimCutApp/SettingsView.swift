@@ -23,7 +23,7 @@ enum AppSettings {
             skimmingEnabledKey: PlaybackDefaults.skimmingEnabled,
             skimDwellMillisecondsKey: PlaybackDefaults.skimDwellMilliseconds,
             jumpSecondsKey: PlaybackDefaults.jumpSeconds,
-            defaultCutModeKey: CutMode.precise.rawValue,
+            defaultCutModeKey: CutMode.fast.rawValue,
             outputDirectoryKey: "",
             shiftRecordingDateKey: true,
             defaultSubtitleLanguageKey: SubtitleLanguages.defaultCode,
@@ -59,7 +59,7 @@ enum AppSettings {
     }
 
     static var defaultCutMode: CutMode {
-        CutMode(rawValue: UserDefaults.standard.string(forKey: defaultCutModeKey) ?? "") ?? .precise
+        CutMode(rawValue: UserDefaults.standard.string(forKey: defaultCutModeKey) ?? "") ?? .fast
     }
 
     /// 设置的输出目录；没有设置或目录不存在时为 nil（放在原文件旁边）。
@@ -104,7 +104,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.skimmingEnabledKey) private var skimmingEnabled = PlaybackDefaults.skimmingEnabled
     @AppStorage(AppSettings.skimDwellMillisecondsKey) private var dwellMilliseconds = PlaybackDefaults.skimDwellMilliseconds
     @AppStorage(AppSettings.jumpSecondsKey) private var jumpSeconds = PlaybackDefaults.jumpSeconds
-    @AppStorage(AppSettings.defaultCutModeKey) private var defaultCutMode = CutMode.precise.rawValue
+    @AppStorage(AppSettings.defaultCutModeKey) private var defaultCutMode = CutMode.fast.rawValue
     @AppStorage(AppSettings.outputDirectoryKey) private var outputDirectory = ""
     @AppStorage(AppSettings.shiftRecordingDateKey) private var shiftRecordingDate = true
     @AppStorage(AppSettings.defaultSubtitleLanguageKey) private var defaultSubtitleLanguage = SubtitleLanguages.defaultCode

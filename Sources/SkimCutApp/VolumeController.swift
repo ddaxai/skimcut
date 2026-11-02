@@ -163,6 +163,19 @@ final class VolumeController {
         }
     }
 
+    /// 所有爆音都已经勾选“处理时压低”。
+    var allBurstsDucked: Bool {
+        let bursts = self.bursts
+        return !bursts.isEmpty && bursts.allSatisfy(isDucked)
+    }
+
+    /// 一次勾选 / 取消全部爆音的压低。
+    func setDuckAllBursts(_ on: Bool) {
+        for burst in bursts where isDucked(burst) != on {
+            toggleDuck(burst)
+        }
+    }
+
     func addDuck(start: Double, end: Double) {
         guard end > start else { return }
         options.ducks.append(VolumeDuck(start: start, end: end, gain: duckGain))

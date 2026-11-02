@@ -12,6 +12,8 @@ public enum DateOperation: Sendable, Equatable {
     case embeddedToFile
     /// 文件日期（创建和修改中较早的一个）→ 内部录制时间，按这个时区写。
     case fileToEmbedded(TimeZone)
+    /// 只改勾选的日期：创建日期、修改日期、拍摄日期（录制时间）。
+    case setSelected(QuickTimeDate, creation: Bool, modification: Bool, recording: Bool)
 
     public var displayName: String {
         switch self {
@@ -20,6 +22,7 @@ public enum DateOperation: Sendable, Equatable {
         case .setFile: return "设置文件日期"
         case .embeddedToFile: return "录制时间 → 文件日期"
         case .fileToEmbedded: return "文件日期 → 录制时间"
+        case .setSelected: return "修改日期"
         }
     }
 }
@@ -216,10 +219,18 @@ public struct MetadataEditor: Sendable {
 
     /// 设置文件的创建日期（只在 macOS 上）和修改日期，然后核对。
     public func setFileDates(_ date: Date, on url: URL) throws {
-        try FileDates(creation: date, modification: date).write(to: url)
+        try setFileDates(date, creation: true, modification: true, on: url)
+    }
+
+    /// 只设置勾选的文件日期，然后核对。
+    public func setFileDates(_ date: Date, creation: Bool, modification: Bool, on url: URL) throws {
+        guard creation || modification else { return }
+        try FileDates(creation: creation ? date : nil, modification: modification ? date : nil).write(to: url)
         let after = try FileDates.read(url)
         func same(_ d: Date?) -> Bool { d.map { abs($0.timeIntervalSince(date)) <= 1 } ?? false }
-        guard same(after.modification), !FileDates.canWriteCreation || same(after.creation) else {
+        guard !modification || same(after.modification),
+              !creation || !FileDates.canWriteCreation || same(after.creation)
+        else {
             let expected = QuickTimeDate.inZone(date, .current).exifToolString
             let actual = [after.creation, after.modification].map { $0.map { QuickTimeDate.inZone($0, .current).exifToolString } ?? "无" }
             throw MetadataError.verificationFailed(
@@ -254,6 +265,19 @@ public struct MetadataEditor: Sendable {
             guard let recording = metadata.recordingDate else { throw MetadataEditError.noEmbeddedDate }
             try setFileDates(recording.date, on: url)
             return DateChange(url: url, embedded: nil, file: recording.date)
+        case .setSelected(let date, let creation, let modification, let recording):
+            var note: String?
+            var embedded: QuickTimeDate?
+            if recording {
+                if kind.canWriteEmbedded {
+                    try await setRecordingDate(date, on: url)
+                    embedded = date
+                } else {
+                    note = MetadataEditError.unsupportedContainer(url.pathExtension.lowercased()).errorDescription
+                }
+            }
+            try setFileDates(date.date, creation: creation, modification: modification, on: url)
+            return DateChange(url: url, embedded: embedded, file: creation || modification ? date.date : nil, note: note)
         case .fileToEmbedded(let zone):
             guard let date = try FileDates.read(url).earliest else { throw MetadataEditError.noFileDate }
             let recording = QuickTimeDate.inZone(date, zone)
