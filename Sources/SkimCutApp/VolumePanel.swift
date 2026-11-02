@@ -1,28 +1,97 @@
 import SkimCore
 import SwiftUI
 
-/// 音量面板：检测结果（LUFS / dBTP / LRA）、处理选项、爆音和局部压低、15 秒试听、生成新文件。
+/// 音量面板。平时只显示结论（偏低 / 正常 / 偏高）、一个刻度和“调到正常音量”按钮；
+/// 具体数值（LUFS / dBTP / LRA）、强度、喷麦、削波修复、局部压低和 15 秒试听都在“高级”里。
 struct VolumePanel: View {
     let player: PlayerController
     @Bindable var volume: VolumeController
     let model: AppModel
+    @State private var showAdvanced = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            statusRow
-            optionsRow
-            if volume.detection == .ready {
-                burstSection
+            simpleRow
+            if volume.detection == .ready, !volume.bursts.isEmpty {
+                burstHint
             }
-            actionRow
             if let result = volume.lastResult {
                 resultRow(result)
+            }
+            DisclosureGroup("高级", isExpanded: $showAdvanced) {
+                VStack(alignment: .leading, spacing: 6) {
+                    if volume.detection == .ready { statusRow }
+                    optionsRow
+                    if volume.detection == .ready {
+                        burstSection
+                    }
+                    actionRow
+                }
+                .padding(.top, 4)
             }
         }
         .font(.callout)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+    }
+
+    // MARK: - 简单视图
+
+    @ViewBuilder
+    private var simpleRow: some View {
+        HStack(spacing: 12) {
+            switch volume.detection {
+            case .ready:
+                if let stats = volume.analysis?.stats {
+                    verdictView(LoudnessVerdict.of(stats), stats: stats)
+                }
+            case .idle, .detecting, .failed:
+                statusRow
+            }
+            Spacer(minLength: 8)
+            if volume.detection == .ready, let button = mainButtonTitle {
+                Button(button) { model.exportVolume(volume) }
+                    .buttonStyle(.borderedProminent)
+                    .help("生成调好音量的新文件（原名_norm），视频不重新编码，原文件不变")
+            }
+            Button("批量…") { model.openBatchWindow(.volume) }
+                .help("一次拖入多个视频，统一调到正常音量")
+        }
+    }
+
+    private func verdictView(_ verdict: LoudnessVerdict, stats: LoudnessStats) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: verdict.needsFix ? "speaker.wave.2.fill" : "checkmark.circle.fill")
+                .font(.title2)
+                .foregroundStyle(verdict.needsFix ? Color.orange : Color.green)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(verdict.title).font(.headline)
+                Text(verdict.detail).foregroundStyle(.secondary)
+            }
+            LoudnessScale(integrated: stats.integrated)
+                .frame(width: 200, height: 26)
+                .help("绿色是正常范围（一般的网络视频、手机视频都在这里）。竖线是这个视频的位置。")
+        }
+    }
+
+    /// 主按钮：音量不正常时“调到正常音量”；正常但勾了压低爆音时“压低突然很响的地方”。
+    private var mainButtonTitle: String? {
+        guard let stats = volume.analysis?.stats else { return nil }
+        if LoudnessVerdict.of(stats).needsFix { return "调到正常音量" }
+        if !volume.options.ducks.isEmpty { return "压低突然很响的地方" }
+        return nil
+    }
+
+    private var burstHint: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+            Text("有 \(volume.bursts.count) 处突然很响（时间轴上的红色标记，点一下可以听）")
+            Toggle("处理时压低这些地方", isOn: Binding(
+                get: { volume.allBurstsDucked },
+                set: { volume.setDuckAllBursts($0) }))
+            Spacer(minLength: 0)
+        }
     }
 
     // MARK: - 检测结果
@@ -32,15 +101,15 @@ struct VolumePanel: View {
         HStack(spacing: 10) {
             switch volume.detection {
             case .idle:
-                Text("还没有检测响度。").foregroundStyle(.secondary)
+                Text("还没有检测音量。").foregroundStyle(.secondary)
                 Button("检测") { volume.detect() }
             case .detecting:
                 if let p = volume.detectionProgress {
                     ProgressView(value: p).frame(width: 140)
-                    Text("正在检测响度… \(Int(p * 100))%").foregroundStyle(.secondary)
+                    Text("正在检测音量… \(Int(p * 100))%").foregroundStyle(.secondary)
                 } else {
                     ProgressView().controlSize(.small)
-                    Text("正在检测响度…").foregroundStyle(.secondary)
+                    Text("正在检测音量…").foregroundStyle(.secondary)
                 }
                 Button("取消") { volume.cancelDetection() }
             case .ready:
@@ -61,9 +130,6 @@ struct VolumePanel: View {
                 }
                 Button("重试") { volume.detect() }
             }
-            Spacer(minLength: 8)
-            Button("批量统一音量…") { model.openBatchWindow(.volume) }
-                .help("一次拖入多个视频，统一处理成相同的音量")
         }
     }
 
@@ -245,5 +311,34 @@ struct VolumePanel: View {
 
     private func number(_ v: Double) -> String {
         v.formatted(.number.precision(.fractionLength(0...1)))
+    }
+}
+
+/// 音量刻度：从“很小”到“很大”，绿色是正常范围，竖线是这个视频的位置。
+private struct LoudnessScale: View {
+    let integrated: Double
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let lo = LoudnessVerdict.position(LoudnessVerdict.normalRange.lowerBound) * w
+            let hi = LoudnessVerdict.position(LoudnessVerdict.normalRange.upperBound) * w
+            let x = LoudnessVerdict.position(integrated) * w
+            VStack(spacing: 2) {
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.secondary.opacity(0.25)).frame(height: 6)
+                    Rectangle().fill(Color.green.opacity(0.7)).frame(width: hi - lo, height: 6).offset(x: lo)
+                    Rectangle().fill(Color.primary).frame(width: 3, height: 14).offset(x: min(max(x - 1.5, 0), w - 3))
+                }
+                .frame(height: 14)
+                HStack {
+                    Text("小").font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("正常").font(.caption2).foregroundStyle(.green)
+                    Spacer()
+                    Text("大").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 }
