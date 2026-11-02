@@ -163,14 +163,18 @@ final class CutPlannerTests: XCTestCase {
         XCTAssertEqual(args, [
             "-hide_banner", "-nostdin", "-n", "-progress", "pipe:1", "-nostats",
             "-ss", "83.456000", "-i", input.path, "-t", "12.000000",
-            "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-avoid_negative_ts", "make_zero",
+            "-map", "0:v:0", "-map", "0:a?", "-c", "copy",
             "-movflags", "+faststart", "-f", "mp4", output.path,
         ])
+        XCTAssertFalse(args.contains("-avoid_negative_ts"), "MP4：用编辑列表让开头精确到帧")
         let hevc = CutPlanner.fastArguments(input: input, output: output, range: CutRange(start: 1, end: 2), info: info(video: "hevc"))
         XCTAssertEqual(hevc[hevc.firstIndex(of: "-tag:v")! + 1], "hvc1")
         let mkv = CutPlanner.fastArguments(
             input: input, output: URL(fileURLWithPath: "/o.mkv"), range: CutRange(start: 1, end: 2), info: info(audio: ["opus"]))
         XCTAssertFalse(mkv.contains("-movflags"))
+        XCTAssertEqual(mkv[mkv.firstIndex(of: "-avoid_negative_ts")! + 1], "make_zero", "MKV 没有编辑列表：从关键帧开始")
+        XCTAssertTrue(CutPlanner.keepsExactStart(outputExtension: "MOV"))
+        XCTAssertFalse(CutPlanner.keepsExactStart(outputExtension: "mkv"))
         XCTAssertEqual(mkv[mkv.firstIndex(of: "-f")! + 1], "matroska")
     }
 

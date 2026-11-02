@@ -138,6 +138,28 @@ final class MetadataIntegrationTests: XCTestCase {
         XCTAssertNil(m.description)
     }
 
+    /// 只改勾选的日期：只勾“修改日期”时录制时间不变；只勾“拍摄日期”时修改日期不变。
+    func testSetSelectedDates() async throws {
+        _ = try TestSupport.requireTool(.exiftool)
+        let url = try await copy("loud_medium.mp4", as: "selected.mp4")
+        let old = Date(timeIntervalSince1970: 1_600_000_000)
+        try FileDates(creation: old, modification: old).write(to: url)
+        let date = try XCTUnwrap(DateInput.parseLocal("2021-03-04 05:06:07", zone: shanghai))
+
+        _ = try await editor.apply(.setSelected(date, creation: false, modification: true, recording: false), to: url)
+        var m = try await read(url)
+        XCTAssertNil(m.recordingDate, "没勾拍摄日期")
+        XCTAssertEqual(try XCTUnwrap(m.fileDates.modification).timeIntervalSince(date.date), 0, accuracy: 1)
+
+        try FileDates(creation: nil, modification: old).write(to: url)
+        _ = try await editor.apply(.setSelected(date, creation: false, modification: false, recording: true), to: url)
+        m = try await read(url)
+        XCTAssertEqual(m.recordingDate?.exifToolString, "2021:03:04 05:06:07+08:00")
+        XCTAssertEqual(try XCTUnwrap(m.fileDates.modification).timeIntervalSince(old), 0, accuracy: 1, "没勾修改日期")
+        let info = try await MediaInfo.probe(url, runner: runner)
+        XCTAssertEqual(VideoSummary(info: info, url: url).quality, "360p")
+    }
+
     // MARK: - MKV
 
     func testMatroskaDatesTitleAndDescription() async throws {

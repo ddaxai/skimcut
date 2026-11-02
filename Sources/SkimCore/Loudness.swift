@@ -250,3 +250,53 @@ public enum FilterGraph {
         return out
     }
 }
+
+/// 给普通用户看的结论：音量偏低、正常还是偏高。
+///
+/// 一般的网络视频、手机视频整体响度在 -16 LUFS 左右；-19 到 -13 都算正常，听起来差不多一样响。
+public enum LoudnessVerdict: Sendable, Equatable {
+    /// 偏低：比正常的中间值（-16）低多少 dB。
+    case low(by: Double)
+    case normal
+    /// 偏高：比 -16 高多少 dB。
+    case high(by: Double)
+
+    public static let center: Double = NormalizeOptions.defaultTarget
+    public static let normalRange: ClosedRange<Double> = -19 ... -13
+
+    public static func of(_ stats: LoudnessStats) -> LoudnessVerdict {
+        let i = stats.integrated
+        if i < normalRange.lowerBound { return .low(by: center - i) }
+        if i > normalRange.upperBound { return .high(by: i - center) }
+        return .normal
+    }
+
+    public var needsFix: Bool { self != .normal }
+
+    public var title: String {
+        switch self {
+        case .low: return "音量偏低"
+        case .normal: return "音量正常"
+        case .high: return "音量偏高"
+        }
+    }
+
+    /// 例如“比一般视频小不少，需要把播放器音量调大才听得清。”
+    public var detail: String {
+        switch self {
+        case .low(let d):
+            let how = d < 6 ? "小一些" : d < 15 ? "小不少" : "小很多"
+            return "比一般视频\(how)，平时要把音量调大才听得清。"
+        case .normal:
+            return "和一般视频差不多，不需要调整。"
+        case .high(let d):
+            let how = d < 6 ? "大一些" : "大不少"
+            return "比一般视频\(how)，可能需要把播放器音量调小。"
+        }
+    }
+
+    /// 在“很小 … 很大”刻度上的位置（0…1），刻度范围 -40 到 -5 LUFS。
+    public static func position(_ integrated: Double) -> Double {
+        min(max((integrated + 40) / 35, 0), 1)
+    }
+}
