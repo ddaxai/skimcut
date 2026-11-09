@@ -482,7 +482,8 @@ final class PlayerController {
     }
 
     private func currentSkimConfiguration() -> SkimController.Configuration {
-        SkimController.Configuration(enabled: AppSettings.skimmingEnabled, dwell: AppSettings.skimDwell)
+        SkimController.Configuration(
+            enabled: AppSettings.skimmingEnabled, dwellPlays: AppSettings.skimDwellPlays, dwell: AppSettings.skimDwell)
     }
 
     /// 设置可能在设置窗口里改了：每次鼠标事件时同步（UserDefaults 读取很便宜）。
@@ -505,6 +506,21 @@ final class PlayerController {
     /// O：终点设在当前显示的那一帧的结尾（包含这一帧）。
     func markOut() {
         let index = frameGrid.frameIndex(at: displayedTime)
+        selection.markOut(at: min(frameGrid.time(ofFrame: index + 1).seconds, duration))
+        redrawTimeline?()
+    }
+
+    /// 播放头（黄线）旁边的“设为开始”：起点设在播放头那一帧的开头。
+    /// 不用 skimmer 位置：点这个按钮时鼠标正在时间轴上，skimmer 跟着鼠标。
+    func markInAtPlayhead() {
+        let index = frameGrid.frameIndex(at: playhead)
+        selection.markIn(at: frameGrid.time(ofFrame: index).seconds)
+        redrawTimeline?()
+    }
+
+    /// “设为结束”：终点设在播放头那一帧的结尾（包含这一帧，和 O 键一样）。
+    func markOutAtPlayhead() {
+        let index = frameGrid.frameIndex(at: playhead)
         selection.markOut(at: min(frameGrid.time(ofFrame: index + 1).seconds, duration))
         redrawTimeline?()
     }

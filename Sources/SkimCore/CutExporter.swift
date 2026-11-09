@@ -43,7 +43,7 @@ public struct CutPlan: Sendable, Equatable {
     /// 例如“实际起点会提前 1.833 秒（从 00:01:21.623 开始）”；不提前时为 nil。
     public var leadInMessage: String? {
         guard options.mode == .fast else { return nil }
-        guard leadIn >= 0.0005 else { return "起点正好是关键帧，快速模式也是精确的。" }
+        guard leadIn >= 0.0005 else { return "不重新编码，开头精确到帧。" }
         return String(format: "实际起点会提前 %.3f 秒", leadIn) + "（从 \(Timecode.format(actualStart)) 开始，那里是最近的关键帧）。"
     }
 }
@@ -87,9 +87,13 @@ public struct CutExporter: Sendable {
         let arguments: [String]
         switch options.mode {
         case .fast:
-            let keyframe = try await Keyframes.keyframe(
-                atOrBefore: range.start, in: source, startTime: info.startTime, runner: runner, locator: locator)
-            actualStart = CutPlanner.fastActualStart(requested: range.start, keyframeAtOrBefore: keyframe)
+            if CutPlanner.keepsExactStart(outputExtension: ext) {
+                actualStart = range.start
+            } else {
+                let keyframe = try await Keyframes.keyframe(
+                    atOrBefore: range.start, in: source, startTime: info.startTime, runner: runner, locator: locator)
+                actualStart = CutPlanner.fastActualStart(requested: range.start, keyframeAtOrBefore: keyframe)
+            }
             arguments = CutPlanner.fastArguments(input: source, output: output, range: range, info: info)
         case .precise:
             actualStart = range.start

@@ -11,6 +11,8 @@ import SkimCore
 final class CutController {
     struct Summary: Equatable {
         var outputName: String
+        /// 快速模式比要求的起点提前了多少秒（MP4/MOV 为 0）。
+        var leadIn: Double
         var leadInMessage: String?
         var encoderDescription: String?
         var warnings: [String]
@@ -46,6 +48,7 @@ final class CutController {
             guard !Task.isCancelled else { return }
             summary = Summary(
                 outputName: plan.output.lastPathComponent,
+                leadIn: plan.leadIn,
                 leadInMessage: plan.leadInMessage,
                 encoderDescription: plan.encoderDescription,
                 warnings: plan.warnings,

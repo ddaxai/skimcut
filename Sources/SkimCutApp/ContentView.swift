@@ -65,9 +65,47 @@ struct PlayerScreen: View {
             TransportBar(player: player)
             TimelineStrip(controller: player)
                 .frame(height: TimelineMetrics.totalHeight)
+                .overlay(alignment: .topLeading) { PlayheadActions(player: player, model: model) }
             BottomPanelSwitcher(player: player, cut: cut, model: model)
         }
         .background(Color.black)
+    }
+}
+
+/// 暂停时显示在播放头（黄线）旁边的两个小按钮：把播放头的位置填进剪切的开始或结束。
+/// 放在时间轴上方的刻度那一条里，不挡缩略图；靠近右边缘时放到黄线左边。
+struct PlayheadActions: View {
+    let player: PlayerController
+    let model: AppModel
+
+    /// 两个按钮大约的总宽度（用来决定放在黄线左边还是右边）。
+    private static let width: CGFloat = 132
+
+    var body: some View {
+        GeometryReader { geo in
+            let x = CGFloat(player.timeline.x(for: player.playhead))
+            if player.mode == .paused, x >= 0, x <= geo.size.width {
+                let onRight = x + 6 + Self.width <= geo.size.width
+                HStack(spacing: 4) {
+                    Button("设为开始") {
+                        player.markInAtPlayhead()
+                        model.bottomPanel = .cut
+                    }
+                    .help("把黄线的位置设为剪切的开始（键盘 I）")
+                    Button("设为结束") {
+                        player.markOutAtPlayhead()
+                        model.bottomPanel = .cut
+                    }
+                    .help("把黄线的位置设为剪切的结束（键盘 O）")
+                }
+                .controlSize(.mini)
+                .buttonStyle(.borderedProminent)
+                .fixedSize()
+                .position(
+                    x: onRight ? x + 6 + Self.width / 2 : x - 6 - Self.width / 2,
+                    y: TimelineMetrics.rulerHeight / 2)
+            }
+        }
     }
 }
 

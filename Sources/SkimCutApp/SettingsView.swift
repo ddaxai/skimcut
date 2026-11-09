@@ -6,6 +6,7 @@ import SwiftUI
 enum AppSettings {
     static let skimmingEnabledKey = "skimmingEnabled"
     static let skimDwellMillisecondsKey = "skimDwellMilliseconds"
+    static let skimDwellPlaysKey = "skimDwellPlays"
     static let jumpSecondsKey = "jumpSeconds"
     static let defaultCutModeKey = "defaultCutMode"
     /// 默认输出目录；空字符串表示放在原文件旁边。
@@ -22,8 +23,9 @@ enum AppSettings {
         UserDefaults.standard.register(defaults: [
             skimmingEnabledKey: PlaybackDefaults.skimmingEnabled,
             skimDwellMillisecondsKey: PlaybackDefaults.skimDwellMilliseconds,
+            skimDwellPlaysKey: false,
             jumpSecondsKey: PlaybackDefaults.jumpSeconds,
-            defaultCutModeKey: CutMode.precise.rawValue,
+            defaultCutModeKey: CutMode.fast.rawValue,
             outputDirectoryKey: "",
             shiftRecordingDateKey: true,
             defaultSubtitleLanguageKey: SubtitleLanguages.defaultCode,
@@ -59,7 +61,7 @@ enum AppSettings {
     }
 
     static var defaultCutMode: CutMode {
-        CutMode(rawValue: UserDefaults.standard.string(forKey: defaultCutModeKey) ?? "") ?? .precise
+        CutMode(rawValue: UserDefaults.standard.string(forKey: defaultCutModeKey) ?? "") ?? .fast
     }
 
     /// 设置的输出目录；没有设置或目录不存在时为 nil（放在原文件旁边）。
@@ -89,6 +91,11 @@ enum AppSettings {
         UserDefaults.standard.bool(forKey: skimmingEnabledKey)
     }
 
+    /// 鼠标在时间轴上停住后是否自动播放（默认关闭）。
+    static var skimDwellPlays: Bool {
+        UserDefaults.standard.bool(forKey: skimDwellPlaysKey)
+    }
+
     /// 停留时间（秒）。
     static var skimDwell: Double {
         Double(max(50, UserDefaults.standard.integer(forKey: skimDwellMillisecondsKey))) / 1000
@@ -103,8 +110,9 @@ enum AppSettings {
 struct SettingsView: View {
     @AppStorage(AppSettings.skimmingEnabledKey) private var skimmingEnabled = PlaybackDefaults.skimmingEnabled
     @AppStorage(AppSettings.skimDwellMillisecondsKey) private var dwellMilliseconds = PlaybackDefaults.skimDwellMilliseconds
+    @AppStorage(AppSettings.skimDwellPlaysKey) private var dwellPlays = false
     @AppStorage(AppSettings.jumpSecondsKey) private var jumpSeconds = PlaybackDefaults.jumpSeconds
-    @AppStorage(AppSettings.defaultCutModeKey) private var defaultCutMode = CutMode.precise.rawValue
+    @AppStorage(AppSettings.defaultCutModeKey) private var defaultCutMode = CutMode.fast.rawValue
     @AppStorage(AppSettings.outputDirectoryKey) private var outputDirectory = ""
     @AppStorage(AppSettings.shiftRecordingDateKey) private var shiftRecordingDate = true
     @AppStorage(AppSettings.defaultSubtitleLanguageKey) private var defaultSubtitleLanguage = SubtitleLanguages.defaultCode
@@ -119,10 +127,12 @@ struct SettingsView: View {
         Form {
             Section("Skimming") {
                 Toggle("鼠标悬停在时间轴上时预览画面（skimming）", isOn: $skimmingEnabled)
+                Toggle("鼠标停住后自动从那里开始播放", isOn: $dwellPlays)
+                    .disabled(!skimmingEnabled)
                 Stepper(value: $dwellMilliseconds, in: 100...3000, step: 50) {
                     Text("停留 \(dwellMilliseconds) 毫秒后开始播放")
                 }
-                .disabled(!skimmingEnabled)
+                .disabled(!skimmingEnabled || !dwellPlays)
             }
             Section("剪切") {
                 Picker("默认剪切模式", selection: $defaultCutMode) {

@@ -277,4 +277,23 @@ final class VolumeTests: XCTestCase {
         XCTAssertTrue(skipped.skipped)
         XCTAssertTrue(skipped.comparison.contains("跳过"))
     }
+
+    // MARK: - 给普通用户看的结论
+
+    func testLoudnessVerdict() {
+        func v(_ i: Double) -> LoudnessVerdict { LoudnessVerdict.of(LoudnessStats(integrated: i, truePeak: -3, range: 5)) }
+        XCTAssertEqual(v(-16), .normal)
+        XCTAssertEqual(v(-19), .normal)
+        XCTAssertEqual(v(-13), .normal)
+        XCTAssertEqual(v(-35), .low(by: 19))
+        XCTAssertEqual(v(-10), .high(by: 6))
+        XCTAssertEqual(v(-35).title, "音量偏低")
+        XCTAssertTrue(v(-35).detail.contains("小很多"))
+        XCTAssertTrue(v(-21).detail.contains("小一些"))
+        XCTAssertTrue(v(-10).detail.contains("大不少"))
+        XCTAssertFalse(v(-16).needsFix)
+        XCTAssertEqual(LoudnessVerdict.position(-40), 0)
+        XCTAssertEqual(LoudnessVerdict.position(-5), 1)
+        XCTAssertEqual(LoudnessVerdict.position(-60), 0)
+    }
 }

@@ -205,4 +205,18 @@ final class MetadataTests: XCTestCase {
         XCTAssertEqual(DateOperation.embeddedToFile.displayName, "录制时间 → 文件日期")
         XCTAssertEqual(MetadataEditError.unsupportedContainer("avi").errorDescription, "这个格式（.avi）不能写入录制时间和标题，只能改文件日期。")
     }
+
+    func testVideoSummary() {
+        XCTAssertEqual(VideoSummary.qualityLabel(width: 1920, height: 1080), "1080p")
+        XCTAssertEqual(VideoSummary.qualityLabel(width: 1080, height: 1920), "1080p", "竖着拍的按短边算")
+        XCTAssertEqual(VideoSummary.qualityLabel(width: 1280, height: 720), "720p")
+        XCTAssertEqual(VideoSummary.qualityLabel(width: 3840, height: 2160), "4K")
+        XCTAssertEqual(VideoSummary.qualityLabel(width: 2560, height: 1440), "2K（1440p）")
+        XCTAssertEqual(VideoSummary.qualityLabel(width: 640, height: 360), "360p")
+        let s = VideoSummary(width: 1920, height: 1080, duration: 10, fileSize: 1_500_000)
+        XCTAssertEqual(s.resolution, "1920 × 1080")
+        XCTAssertEqual(s.quality, "1080p")
+        XCTAssertNotNil(s.sizeText)
+        XCTAssertNil(VideoSummary().quality)
+    }
 }

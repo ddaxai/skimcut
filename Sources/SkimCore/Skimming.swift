@@ -65,14 +65,20 @@ public struct PointerVelocityTracker: Sendable {
 public struct SkimController: Sendable {
     public struct Configuration: Sendable, Equatable {
         public var enabled: Bool
+        /// 鼠标停住后是否自动从那里开始播放（用户要求默认关闭：停住只显示那一帧）。
+        public var dwellPlays: Bool
         /// 停留多久开始播放（秒）。
         public var dwell: Double
         /// 停下多久补一次精确 seek（秒）。
         public var settle: Double
         public var tolerance: SkimTolerancePolicy
 
-        public init(enabled: Bool = true, dwell: Double = 0.3, settle: Double = 0.1, tolerance: SkimTolerancePolicy = .init()) {
+        public init(
+            enabled: Bool = true, dwellPlays: Bool = true, dwell: Double = 0.3, settle: Double = 0.1,
+            tolerance: SkimTolerancePolicy = .init()
+        ) {
             self.enabled = enabled
+            self.dwellPlays = dwellPlays
             self.dwell = max(0, dwell)
             self.settle = max(0, settle)
             self.tolerance = tolerance
@@ -169,6 +175,7 @@ public struct SkimController: Sendable {
             lastRequest = exact
             return [.seek(exact)]
         case .dwell:
+            guard configuration.dwellPlays else { return [] }
             state = .dwellPlaying
             lastRequest = SeekRequest(time: last.time, tolerance: 0)
             return [.startDwellPlayback(at: last.time)]

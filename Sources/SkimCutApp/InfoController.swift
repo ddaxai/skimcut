@@ -18,6 +18,8 @@ final class InfoController {
 
     let source: URL
     private(set) var metadata: MediaMetadata?
+    /// 分辨率、画质、大小、时长。
+    private(set) var summary: VideoSummary?
     private(set) var isLoading = false
     private(set) var isWorking = false
     private(set) var loadError: String?
@@ -31,6 +33,10 @@ final class InfoController {
     var timeZone: TimeZone = .current
     var titleText = ""
     var descriptionText = ""
+    /// 要改哪些日期（默认三个都改：访达排序和“照片”里的时间都对）。
+    var changeCreation = true
+    var changeModification = true
+    var changeRecording = true
 
     var pendingEdit: PendingEdit?
 
@@ -55,6 +61,9 @@ final class InfoController {
         do {
             let m = try await MetadataReader.read(source)
             metadata = m
+            if let info = try? await MediaInfo.probe(source) {
+                summary = VideoSummary(info: info, url: source)
+            }
             loadError = nil
             if resetFields { resetFieldsFromMetadata() }
         } catch {
@@ -101,6 +110,12 @@ final class InfoController {
             fields = "把录制时间写进文件的创建日期和修改日期。"
         case .fileToEmbedded:
             fields = "把文件日期（创建和修改中较早的一个）写进录制时间，时区 \(TimeZones.label(timeZone, at: date))。"
+        case .setSelected(let d, let creation, let modification, let recording):
+            var names: [String] = []
+            if creation { names.append("创建日期") }
+            if modification { names.append("修改日期") }
+            if recording { names.append(kind.canWriteEmbedded ? "拍摄日期" : "拍摄日期（这个格式不能写，会跳过）") }
+            fields = names.joined(separator: "、") + "改为 \(DateInput.display(d))。"
         }
         if !FileDates.canWriteCreation, fields.contains("创建") { fields += "（这个系统不能改创建日期。）" }
         pendingEdit = PendingEdit(

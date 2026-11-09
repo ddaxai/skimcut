@@ -1,7 +1,8 @@
 import SkimCore
 import SwiftUI
 
-/// 精确剪切面板：起点 / 终点（或时长）输入框、模式、导出前的提示、多个区间的列表。
+/// 剪切面板：掐头去尾。拖动时间轴两端的白色手柄，下面实时显示开始 / 结束在原视频里的时间，
+/// 也可以直接输入；一个“导出”按钮。模式、时长输入、多个区间收在“更多选项”里。
 ///
 /// 输入框和时间轴的选区双向同步：拖动手柄或按 I / O 时输入框跟着变；
 /// 在输入框里按回车或离开输入框时，选区跟着变。
@@ -17,6 +18,7 @@ struct CutPanel: View {
     @State private var useDuration = false
     @State private var startInvalid = false
     @State private var endInvalid = false
+    @State private var showMore = false
     @FocusState private var focused: Field?
 
     /// 导出前提示的刷新键：区间或模式变了就重新规划。
@@ -27,41 +29,61 @@ struct CutPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text("起点")
-                timeField($startText, invalid: startInvalid, field: .start)
-
-                Picker("", selection: $useDuration) {
-                    Text("终点").tag(false)
-                    Text("时长").tag(true)
+            HStack(alignment: .bottom, spacing: 14) {
+                labeled("开始") { timeField($startText, invalid: startInvalid, field: .start) }
+                labeled(useDuration ? "时长" : "结束") { timeField($endText, invalid: endInvalid, field: .end) }
+                labeled("剪后时长") {
+                    Text(Timecode.format(player.selection.length))
+                        .font(.system(.body, design: .monospaced))
+                        .padding(.vertical, 3)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                timeField($endText, invalid: endInvalid, field: .end)
-
-                Picker("模式", selection: $cut.mode) {
-                    ForEach(CutMode.allCases, id: \.self) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .fixedSize()
-
                 Spacer(minLength: 8)
-
-                Button("添加到列表") {
-                    cut.addRange(player.selectedRange)
-                }
-                .help("把当前区间存进列表，可以一次导出多个区间（每个区间一个文件）")
-
-                Button("导出") {
+                Button {
                     model.exportCuts(source: cut.source, ranges: [player.selectedRange], mode: cut.mode)
+                } label: {
+                    Text("导出").frame(minWidth: 64)
                 }
-                .help("把当前区间另存为新文件（原文件不变）。快捷键 ⌘E")
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(player.selection.isFull)
+                .help(player.selection.isFull
+                      ? "先拖动时间轴两端的白色手柄（或输入时间）选出要保留的部分"
+                      : "把选中的部分另存为新文件（原文件不变）。快捷键 ⌘E")
             }
 
-            summaryView
+            Text(hint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            DisclosureGroup("更多选项", isExpanded: $showMore) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 10) {
+                        Picker("模式", selection: $cut.mode) {
+                            ForEach(CutMode.allCases, id: \.self) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .fixedSize()
+                        .help("无损快剪：不重新编码，很快；精确：重新编码，任何格式都精确到帧，但慢很多")
+                        Picker("第二个输入框", selection: $useDuration) {
+                            Text("填结束时间").tag(false)
+                            Text("填时长").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .fixedSize()
+                        Spacer(minLength: 8)
+                        Button("添加到列表") {
+                            cut.addRange(player.selectedRange)
+                        }
+                        .disabled(player.selection.isFull)
+                        .help("把当前区间存进列表，可以一次导出多个区间（每个区间一个文件）")
+                    }
+                    summaryView
+                }
+                .padding(.top, 4)
+            }
+            .font(.callout)
 
             if !cut.ranges.isEmpty {
                 rangeList
@@ -84,6 +106,27 @@ struct CutPanel: View {
     }
 
     // MARK: - 输入框
+
+    private func labeled<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            content()
+        }
+    }
+
+    /// 输入框下面的一行说明。
+    private var hint: String {
+        if player.selection.isFull {
+            return "拖动时间轴两端的白色手柄掐头去尾，或者直接输入时间（例如 0:30 表示 30 秒）。"
+        }
+        if cut.mode == .precise {
+            return "精确模式会重新编码，比较慢。只是掐头去尾时用“无损快剪”就够了（在“更多选项”里）。"
+        }
+        if let summary = cut.summary, let lead = summary.leadInMessage, summary.leadIn > 0 {
+            return lead
+        }
+        return "无损快剪：不重新编码，画质不变，一般十几秒内完成。"
+    }
 
     private func timeField(_ text: Binding<String>, invalid: Bool, field: Field) -> some View {
         TextField("0:00.000", text: text)

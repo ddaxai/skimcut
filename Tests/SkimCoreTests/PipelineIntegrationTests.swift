@@ -117,15 +117,17 @@ final class PipelineIntegrationTests: XCTestCase {
             subtitles: .init(tracks: info.subtitleStreams.compactMap(SubtitleTrack.embedded), container: .mkv))
         let result = try await exporter().export(job)
         let output = try XCTUnwrap(result.output)
-        XCTAssertEqual(try XCTUnwrap(result.actualStart), 4, accuracy: 0.05, "快速模式：起点之前的关键帧（MKV 里约 4.02 秒）")
+        XCTAssertEqual(try XCTUnwrap(result.actualStart), 5, accuracy: 0.001, "无损快剪：剪切的中间文件是 MP4，开头精确到帧")
         let text = try await runner.output(try ToolLocator.shared.command(.ffmpeg, [
             "-hide_banner", "-nostdin", "-v", "error", "-i", output.path, "-map", "0:s:0", "-f", "srt", "-",
         ]))
         XCTAssertFalse(text.contains("第一条字幕"), "起点之前的去掉")
         let cues = text.split(separator: "\n").filter { $0.contains("-->") }.compactMap { SubtitleShifter.parseTimingLine(String($0)) }
         XCTAssertEqual(cues.count, 2, text)
-        // 源 4.0 秒 → 片段的第一帧 v0（不到 0.1 秒）。
-        XCTAssertLessThan(try XCTUnwrap(cues.first).0, 0.1)
+        // 跨过起点的字幕从起点（源 5.0 秒）开始。输出是 MKV（没有编辑列表），剪切时藏起来的那段
+        // （4.0 秒的关键帧到 5.0 秒）会露出来，ffmpeg 把画面和字幕一起往后挪约 1 秒，所以起点在 0–1.1 秒之间。
+        let firstCue = try XCTUnwrap(cues.first).0
+        XCTAssertTrue((0...1.1).contains(firstCue), "\(firstCue)")
         XCTAssertLessThanOrEqual(try XCTUnwrap(cues.last).1, 5.1, "截到终点")
     }
 
