@@ -142,6 +142,15 @@ final class SkimControllerTests: XCTestCase {
         XCTAssertEqual(c.state, .skimming)
     }
 
+    /// 用户要求：默认鼠标停住后不自动播放，只显示那一帧（精确 seek 仍然会补上）。
+    func testDwellDoesNothingWhenDwellPlaybackIsOff() {
+        var c = SkimController()
+        c.configuration = SkimController.Configuration(dwellPlays: false)
+        let g = generation(move(&c, x: 0, t: 2.04, at: 0))!
+        XCTAssertEqual(c.timerFired(.dwell, generation: g), [])
+        XCTAssertEqual(c.state, .skimming)
+    }
+
     func testStaleTimersAreIgnored() {
         var c = SkimController()
         let g1 = generation(move(&c, x: 0, t: 1, at: 0))!
