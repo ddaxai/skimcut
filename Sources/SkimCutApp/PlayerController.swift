@@ -42,6 +42,40 @@ final class PlayerController {
     /// 选中的区间（剪切的起点和终点，M2 导出时使用）。默认整段。
     private(set) var selection: TimeSelection
 
+    /// 吸附转场的状态（只在它记录的播放头位置和当前播放头相同时有效）。
+    enum SnapStatus: Equatable {
+        /// 正在分析点击位置附近。
+        case searching(playhead: Double)
+        /// 已经吸附到这个转场。
+        case snapped(Transition, playhead: Double)
+        /// 附近没有转场，播放头留在点击的位置。
+        case notFound(playhead: Double)
+
+        var playhead: Double {
+            switch self {
+            case .searching(let p), .snapped(_, let p), .notFound(let p): return p
+            }
+        }
+    }
+
+    /// “找出全部转场”的状态。
+    enum TransitionScan: Equatable {
+        case idle
+        case running(progress: Double?)
+        case done(count: Int)
+        case failed(String)
+    }
+
+    /// 点击时间轴后吸附到附近的转场（设置里和 N 键可以切换）。
+    private(set) var snappingEnabled = AppSettings.snapToTransitions
+    private(set) var snapStatus: SnapStatus?
+    private(set) var transitionScan: TransitionScan = .idle
+    /// 已经分析过的范围和找到的转场（时间轴上画出来）。
+    @ObservationIgnored private(set) var transitionCache = TransitionCache()
+    @ObservationIgnored private var snapTask: Task<Void, Never>?
+    /// 正在运行的“找出全部转场”任务（取消用）。
+    @ObservationIgnored var transitionScanJob: JobID?
+
     /// 时间轴需要重画时调用（由时间轴视图设置）。
     @ObservationIgnored var redrawTimeline: (() -> Void)?
     /// 让播放画面重新接收键盘（在输入框里按回车之后）。由播放画面设置。
@@ -99,6 +133,9 @@ final class PlayerController {
     func close() {
         skimTimerTask?.cancel()
         skimTimerTask = nil
+        snapTask?.cancel()
+        snapTask = nil
+        transitionCache.removeAll()
         removeTimeObserver()
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -150,6 +187,8 @@ final class PlayerController {
             markIn()
         case .markOut:
             markOut()
+        case .toggleSnapping:
+            toggleSnapping()
         }
     }
 
@@ -410,6 +449,7 @@ final class PlayerController {
 
     func pointerMoved(x: Double, timestamp: Double) {
         refreshSkimConfiguration()
+        refreshSnappingSetting()
         let time = timeline.time(at: x)
         handle(skim.pointerMoved(
             x: x, time: time, timestamp: timestamp,
@@ -425,6 +465,10 @@ final class PlayerController {
     }
 
     func clicked(x: Double) {
+        // 新的点击：上一次的吸附作废（还在分析的话结束 ffmpeg）。
+        snapTask?.cancel()
+        snapTask = nil
+        snapStatus = nil
         refreshSkimConfiguration()
         handle(skim.clicked(at: timeline.time(at: x)))
         skimmerTime = skim.skimmerTime
@@ -498,6 +542,7 @@ final class PlayerController {
 
     /// I：起点设在当前显示的那一帧的开头（skimming 时是 skimmer 位置，否则是播放头）。
     func markIn() {
+        if skimmerTime == nil { return markInAtPlayhead() }
         let index = frameGrid.frameIndex(at: displayedTime)
         selection.markIn(at: frameGrid.time(ofFrame: index).seconds)
         redrawTimeline?()
@@ -505,6 +550,7 @@ final class PlayerController {
 
     /// O：终点设在当前显示的那一帧的结尾（包含这一帧）。
     func markOut() {
+        if skimmerTime == nil { return markOutAtPlayhead() }
         let index = frameGrid.frameIndex(at: displayedTime)
         selection.markOut(at: min(frameGrid.time(ofFrame: index + 1).seconds, duration))
         redrawTimeline?()
@@ -513,6 +559,11 @@ final class PlayerController {
     /// 播放头（黄线）旁边的“设为开始”：起点设在播放头那一帧的开头。
     /// 不用 skimmer 位置：点这个按钮时鼠标正在时间轴上，skimmer 跟着鼠标。
     func markInAtPlayhead() {
+        if let transition = snappedTransition {
+            selection.markIn(at: min(frameGrid.nearestBoundary(transition.inPoint), duration))
+            redrawTimeline?()
+            return
+        }
         let index = frameGrid.frameIndex(at: playhead)
         selection.markIn(at: frameGrid.time(ofFrame: index).seconds)
         redrawTimeline?()
@@ -520,6 +571,11 @@ final class PlayerController {
 
     /// “设为结束”：终点设在播放头那一帧的结尾（包含这一帧，和 O 键一样）。
     func markOutAtPlayhead() {
+        if let transition = snappedTransition, transition.outPoint > 0 {
+            selection.markOut(at: min(frameGrid.nearestBoundary(transition.outPoint), duration))
+            redrawTimeline?()
+            return
+        }
         let index = frameGrid.frameIndex(at: playhead)
         selection.markOut(at: min(frameGrid.time(ofFrame: index + 1).seconds, duration))
         redrawTimeline?()
@@ -589,6 +645,140 @@ final class PlayerController {
     }
 
     // MARK: - 缩放
+
+    // MARK: - 吸附转场
+
+    /// 播放头正停在吸附到的转场上时，返回这个转场（“设为开始 / 结束”用它的两边）。
+    var snappedTransition: Transition? {
+        guard case .snapped(let t, let p)? = snapStatus, p == playhead, mode == .paused else { return nil }
+        return t
+    }
+
+    /// 当前播放头位置的吸附状态（播放头移走了就不显示）。
+    var currentSnapStatus: SnapStatus? {
+        guard let status = snapStatus, status.playhead == playhead, mode == .paused else { return nil }
+        return status
+    }
+
+    func toggleSnapping() {
+        snappingEnabled.toggle()
+        AppSettings.snapToTransitions = snappingEnabled
+        if !snappingEnabled {
+            snapTask?.cancel()
+            snapTask = nil
+            snapStatus = nil
+        }
+    }
+
+    /// 设置窗口里改了开关：鼠标点击时同步。
+    private func refreshSnappingSetting() {
+        let enabled = AppSettings.snapToTransitions
+        if enabled != snappingEnabled { snappingEnabled = enabled }
+    }
+
+    /// 时间轴上点击（或拖动播放头）松开鼠标后调用：在播放头附近找转场，找到就把播放头移过去。
+    ///
+    /// 只在暂停时吸附。附近已经分析过就直接用；否则只解码附近几秒（缩小、硬件解码），
+    /// 上一次还没完成就取消它。搜索范围跟着时间轴缩放：放大时只找附近一点点。
+    func snapPlayheadToTransition() {
+        snapTask?.cancel()
+        snapTask = nil
+        refreshSnappingSetting()
+        guard snappingEnabled, mode == .paused else {
+            snapStatus = nil
+            return
+        }
+        let clicked = playhead
+        let secondsPerPixel = timeline.secondsPerPixel
+
+        // 已经分析过（例如“找出全部转场”之后）：不用解码，范围按缩放算，不设上限。
+        let wide = TransitionSnapper.searchRadius(secondsPerPixel: secondsPerPixel, maximum: nil)
+        if transitionCache.covers(max(0, clicked - wide)...min(duration, clicked + wide)) {
+            applySnap(clickedAt: clicked, radius: wide)
+            return
+        }
+        let radius = TransitionSnapper.searchRadius(secondsPerPixel: secondsPerPixel)
+        if transitionCache.covers(max(0, clicked - radius)...min(duration, clicked + radius)) {
+            applySnap(clickedAt: clicked, radius: radius)
+            return
+        }
+
+        let window = TransitionSnapper.analysisWindow(around: clicked, radius: radius, duration: duration)
+        let url = sourceURL
+        let total = duration
+        snapStatus = .searching(playhead: clicked)
+        snapTask = Task { [weak self] in
+            do {
+                let result = try await TransitionDetector.detect(url, window: window, duration: total)
+                guard let self, !Task.isCancelled else { return }
+                self.transitionCache.insert(result.transitions, covering: result.covered)
+                self.redrawTimeline?()
+                self.applySnap(clickedAt: clicked, radius: radius)
+            } catch {
+                // 分析失败（例如没有视频轨道）：播放头留在点击的位置。
+                guard let self, !Task.isCancelled else { return }
+                if self.snapStatus == .searching(playhead: clicked) { self.snapStatus = nil }
+            }
+        }
+    }
+
+    private func applySnap(clickedAt clicked: Double, radius: Double) {
+        // 用户已经做了别的操作（播放、逐帧、点了别处）：不再移动播放头。
+        guard playhead == clicked, mode == .paused else {
+            if case .searching? = snapStatus { snapStatus = nil }
+            return
+        }
+        guard let transition = TransitionSnapper.nearest(to: clicked, in: transitionCache.transitions, within: radius) else {
+            snapStatus = .notFound(playhead: clicked)
+            return
+        }
+        let raw = TransitionSnapper.playheadTime(
+            for: transition, clickedAt: clicked, frameDuration: frameGrid.secondsPerFrame)
+        let target = min(frameGrid.nearestBoundary(raw), lastFrameStart)
+        playhead = target
+        chaseSeek(SeekRequest(time: target + 0.0001))
+        snapStatus = .snapped(transition, playhead: target)
+        redrawTimeline?()
+    }
+
+    private var lastFrameStart: Double {
+        frameGrid.time(ofFrame: frameGrid.lastFrameIndex(duration: duration)).seconds
+    }
+
+    /// 已经找到的全部转场（时间轴上画出来）。
+    var knownTransitions: [Transition] { transitionCache.transitions }
+
+    func beginTransitionScan() {
+        transitionScan = .running(progress: nil)
+    }
+
+    func transitionScanProgressed(_ progress: Double?) {
+        guard case .running = transitionScan else { return }
+        transitionScan = .running(progress: progress)
+    }
+
+    func finishTransitionScan(_ transitions: [Transition], covered: ClosedRange<Double>) {
+        transitionScanJob = nil
+        transitionCache.insert(transitions, covering: covered)
+        transitionScan = .done(count: transitionCache.transitions.count)
+        redrawTimeline?()
+    }
+
+    func failTransitionScan(_ error: Error) {
+        transitionScanJob = nil
+        if error is CancellationError {
+            transitionScan = .idle
+        } else {
+            transitionScan = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+        }
+    }
+
+    /// 按全部转场分段（“找出全部转场”之后）。
+    var transitionSegments: [CutRange] {
+        TransitionSegments.ranges(duration: duration, transitions: transitionCache.transitions).map {
+            CutRange(start: frameGrid.nearestBoundary($0.start), end: min(frameGrid.nearestBoundary($0.end), duration))
+        }
+    }
 
     func zoom(by factor: Double, anchorX: Double? = nil) {
         let anchor: Double

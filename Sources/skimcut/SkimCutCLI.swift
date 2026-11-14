@@ -9,7 +9,7 @@ struct SkimCutCLI: AsyncParsableCommand {
         abstract: "SkimCut 命令行工具：提供 SkimCore 的全部功能。",
         version: SkimCoreInfo.version,
         subcommands: [
-            Tools.self, Probe.self, Preview.self, KeyframesCommand.self, Cut.self, Subs.self,
+            Tools.self, Probe.self, Preview.self, KeyframesCommand.self, TransitionsCommand.self, Cut.self, Subs.self,
             Loudness.self, Normalize.self, Audition.self, Info.self, Dates.self, Meta.self, Export.self,
         ]
     )
@@ -175,6 +175,63 @@ struct KeyframesCommand: AsyncParsableCommand {
         for t in frames { print(Timecode.format(t)) }
         if let k = Keyframes.keyframe(atOrBefore: around, in: frames) {
             print("不晚于 \(Timecode.format(around)) 的最近关键帧：\(Timecode.format(k))")
+        }
+    }
+}
+
+/// `skimcut transitions <文件> [--around 1:23.4 --radius 3]`：找转场（硬切、黑屏）。
+struct TransitionsCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "transitions",
+        abstract: "找转场（画面切换、黑屏）。给 --around 时只分析那附近，并显示播放头会吸附到哪里；不给时分析整段，并列出按转场分成的几段。")
+
+    @Argument(help: "视频文件。", transform: { URL(fileURLWithPath: $0) })
+    var file: URL
+
+    @Option(help: "只找这个时间附近的转场，例如 83.456、1:23.456。", transform: parseTime)
+    var around: Double?
+
+    @Option(help: "--around 的搜索半径（秒）。")
+    var radius: Double = 3
+
+    @Option(help: "画面切换的阈值（0…100，越大越不容易判为切换）。默认：找附近时 10，整段时 14。")
+    var threshold: Double?
+
+    func run() async throws {
+        let info = try await MediaInfo.probe(file)
+        guard let duration = info.bestDuration else { throw ValidationError("读不到视频时长。") }
+        if let around {
+            var options = TransitionDetectionOptions()
+            if let threshold { options.sceneThreshold = threshold }
+            let window = TransitionSnapper.analysisWindow(around: around, radius: radius, duration: duration)
+            let result = try await TransitionDetector.detect(file, window: window, duration: duration, options: options)
+            print("分析了 \(Timecode.format(result.covered.lowerBound)) – \(Timecode.format(result.covered.upperBound))")
+            for t in result.transitions { print(describe(t)) }
+            let frame = info.videoStream?.frameRate.map { 1 / $0 } ?? (1.0 / 30)
+            if let t = TransitionSnapper.nearest(to: around, in: result.transitions, within: radius) {
+                let playhead = TransitionSnapper.playheadTime(for: t, clickedAt: around, frameDuration: frame)
+                print("吸附到：\(t.displayName)，播放头 \(Timecode.format(playhead))；设为开始 \(Timecode.format(t.inPoint))，设为结束 \(Timecode.format(t.outPoint))")
+            } else {
+                print("\(Timecode.format(around)) 附近 \(radius) 秒内没有转场。")
+            }
+        } else {
+            var options = TransitionDetectionOptions.fullScan
+            if let threshold { options.sceneThreshold = threshold }
+            let result = try await TransitionDetector.detect(file, window: nil, duration: duration, options: options)
+            if result.transitions.isEmpty { print("没有找到转场。") }
+            for t in result.transitions { print(describe(t)) }
+            let segments = TransitionSegments.ranges(duration: duration, transitions: result.transitions)
+            print("按转场分成 \(segments.count) 段：")
+            for (i, r) in segments.enumerated() {
+                print("  \(i + 1). \(Timecode.format(r.start)) – \(Timecode.format(r.end))")
+            }
+        }
+    }
+
+    private func describe(_ t: Transition) -> String {
+        switch t.kind {
+        case .cut: return "画面切换 \(Timecode.format(t.inPoint))"
+        case .black: return "\(t.displayName)：\(Timecode.format(t.outPoint)) – \(Timecode.format(t.inPoint))"
         }
     }
 }

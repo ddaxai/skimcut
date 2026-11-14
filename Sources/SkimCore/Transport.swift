@@ -106,6 +106,11 @@ public struct FrameGrid: Sendable, Equatable {
         Int64((seconds / secondsPerFrame + 0.25).rounded(.down))
     }
 
+    /// 离 `seconds` 最近的帧边界（ffmpeg 找到的时间对齐到播放器的帧）。
+    public func nearestBoundary(_ seconds: Double) -> Double {
+        time(ofFrame: Int64((max(seconds, 0) / secondsPerFrame).rounded())).seconds
+    }
+
     /// 视频的最后一帧。
     public func lastFrameIndex(duration: Double) -> Int64 {
         max(0, Int64((duration / secondsPerFrame - 1e-6).rounded(.up)) - 1)

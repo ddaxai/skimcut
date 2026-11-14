@@ -15,6 +15,8 @@ final class TimelineNSView: KeyHandlingView {
     private var draggingHandle: SelectionHandle?
     /// 鼠标按下时点中了爆音标记：拖动时不移动播放头。
     private var clickedMarker = false
+    /// 这次按下鼠标是在时间轴上点击 / 拖动播放头（松开时吸附到附近的转场）。
+    private var clickedTimeline = false
 
     override var isFlipped: Bool { false }
     override var isOpaque: Bool { true }
@@ -82,6 +84,7 @@ final class TimelineNSView: KeyHandlingView {
             controller.play(from: burst.start - 1)
             return
         }
+        clickedTimeline = true
         controller?.clicked(x: x)
     }
 
@@ -97,6 +100,10 @@ final class TimelineNSView: KeyHandlingView {
 
     override func mouseUp(with event: NSEvent) {
         clickedMarker = false
+        if clickedTimeline {
+            clickedTimeline = false
+            controller?.snapPlayheadToTransition()
+        }
         guard draggingHandle != nil else { return }
         draggingHandle = nil
         controller?.endHandleDrag()
@@ -193,6 +200,7 @@ final class TimelineNSView: KeyHandlingView {
 
         drawSelection(controller, geometry: geometry, strip: strip)
         drawLoudnessMarkers(controller, geometry: geometry, strip: strip)
+        drawTransitions(controller, geometry: geometry, strip: strip)
 
         // 播放头：黄色，顶部带一个小三角。
         let playheadX = CGFloat(geometry.x(for: controller.playhead)).rounded(.down) + 0.5
@@ -304,6 +312,34 @@ final class TimelineNSView: KeyHandlingView {
             NSRect(x: x0, y: strip.minY, width: x1 - x0, height: strip.height).fill()
             NSColor.systemRed.setFill()
             NSRect(x: x0, y: strip.maxY - 5, width: x1 - x0, height: 5).fill()
+        }
+    }
+
+    /// 找到的转场：黑屏是一段淡青色，两边各一条青线；画面切换是一条青线。
+    private func drawTransitions(_ controller: PlayerController, geometry: TimelineGeometry, strip: NSRect) {
+        let transitions = controller.knownTransitions
+        guard !transitions.isEmpty else { return }
+        let visible = geometry.visibleRange
+        let color = NSColor.systemTeal
+        for t in transitions where t.inPoint >= visible.lowerBound && t.outPoint <= visible.upperBound {
+            let x0 = CGFloat(geometry.x(for: t.outPoint)).rounded(.down)
+            let x1 = CGFloat(geometry.x(for: t.inPoint)).rounded(.down)
+            if t.kind == .black, x1 - x0 >= 1 {
+                color.withAlphaComponent(0.25).setFill()
+                NSRect(x: x0, y: strip.minY, width: x1 - x0, height: strip.height).fill()
+            }
+            color.setFill()
+            let edges: [CGFloat] = (t.kind == .black && x1 - x0 >= 3) ? [x0, x1] : [x0]
+            for x in edges {
+                NSRect(x: x - 0.75, y: strip.minY, width: 1.5, height: strip.height).fill()
+            }
+            // 底部的小三角，线很细时也容易看到。
+            let marker = NSBezierPath()
+            marker.move(to: NSPoint(x: x0 - 4, y: strip.minY))
+            marker.line(to: NSPoint(x: x0 + 4, y: strip.minY))
+            marker.line(to: NSPoint(x: x0, y: strip.minY + 6))
+            marker.close()
+            marker.fill()
         }
     }
 

@@ -117,6 +117,10 @@ final class AppModel {
         volume?.close()
         volume = nil
         if let player {
+            if let scan = player.transitionScanJob {
+                let analysisQueue = self.analysisQueue
+                Task { await analysisQueue.cancel(scan) }
+            }
             player.close()
             if player.playbackURL != player.sourceURL {
                 previewStore.remove(player.playbackURL)
@@ -281,6 +285,47 @@ final class AppModel {
     var loadingProgress: Double? {
         guard case .loading(_, _, let jobID?) = loadState else { return nil }
         return jobs.first { $0.id == jobID }?.progress
+    }
+
+    // MARK: - 找转场
+
+    /// “找出全部转场”：在后台把整段视频缩小后分析一遍（进入分析队列，可以取消），
+    /// 结果画在时间轴上，之后点击时间轴吸附时不用再解码。
+    func findAllTransitions() {
+        guard let player else { return }
+        if case .running = player.transitionScan { return }
+        player.beginTransitionScan()
+        let url = player.sourceURL
+        let duration = player.duration
+        let queue = analysisQueue
+        Task { @MainActor [weak player] in
+            let id = await queue.enqueue(title: "找转场：\(url.lastPathComponent)") { [weak player] context in
+                let target = player
+                do {
+                    let result = try await TransitionDetector.detect(
+                        url, window: nil, duration: duration, options: .fullScan
+                    ) { p in
+                        context.report(progress: p)
+                        Task { @MainActor in target?.transitionScanProgressed(p) }
+                    }
+                    await target?.finishTransitionScan(result.transitions, covered: result.covered)
+                } catch {
+                    await target?.failTransitionScan(error)
+                    throw error
+                }
+            }
+            if let player, case .running = player.transitionScan { player.transitionScanJob = id }
+        }
+    }
+
+    func cancelTransitionScan() {
+        guard let player else { return }
+        if let id = player.transitionScanJob {
+            let queue = analysisQueue
+            Task { await queue.cancel(id) }
+        }
+        // 还在排队时任务不会运行，直接改回来。
+        player.failTransitionScan(CancellationError())
     }
 
     // MARK: - 剪切导出

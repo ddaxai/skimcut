@@ -78,6 +78,11 @@ final class CutController {
         ranges.append(range)
     }
 
+    /// 一次加入多个区间（按转场分段）。
+    func addRanges(_ list: [CutRange]) {
+        for range in list { addRange(range) }
+    }
+
     func removeRange(at index: Int) {
         guard ranges.indices.contains(index) else { return }
         ranges.remove(at: index)
