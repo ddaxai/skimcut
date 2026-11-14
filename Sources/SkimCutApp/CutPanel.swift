@@ -79,6 +79,7 @@ struct CutPanel: View {
                         .disabled(player.selection.isFull)
                         .help("把当前区间存进列表，可以一次导出多个区间（每个区间一个文件）")
                     }
+                    transitionRow
                     summaryView
                 }
                 .padding(.top, 4)
@@ -216,6 +217,46 @@ struct CutPanel: View {
         }
         .font(.callout)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - 找出全部转场
+
+    /// 找出全部转场 → 按转场分段加入区间列表。
+    @ViewBuilder
+    private var transitionRow: some View {
+        HStack(spacing: 8) {
+            switch player.transitionScan {
+            case .idle:
+                Button("找出全部转场") { model.findAllTransitions() }
+                    .help("在后台把整段视频缩小后分析一遍，在时间轴上标出所有黑屏和画面切换，然后可以按转场分段导出。视频越长越久，可以取消。")
+            case .running(let progress):
+                ProgressView(value: progress ?? 0)
+                    .frame(width: 120)
+                Text(progress.map { "正在找转场… \(Int(($0 * 100).rounded()))%" } ?? "正在找转场…")
+                    .foregroundStyle(.secondary)
+                Button("取消") { model.cancelTransitionScan() }
+            case .done(let count):
+                if count == 0 {
+                    Text("没有找到转场")
+                        .foregroundStyle(.secondary)
+                } else {
+                    let segments = player.transitionSegments
+                    Text("找到 \(count) 个转场（时间轴上的青色线）")
+                    Button("按转场分成 \(segments.count) 段，加入列表") {
+                        cut.addRanges(segments)
+                    }
+                    .disabled(segments.count < 2)
+                    .help("每一段导出成一个文件；黑屏不包含在任何一段里。加入列表后点“全部导出”。")
+                }
+            case .failed(let message):
+                Text("找转场失败：\(message)")
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Button("重试") { model.findAllTransitions() }
+            }
+            Spacer(minLength: 0)
+        }
     }
 
     // MARK: - 多个区间

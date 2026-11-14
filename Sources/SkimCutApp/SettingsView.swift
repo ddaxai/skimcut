@@ -7,6 +7,7 @@ enum AppSettings {
     static let skimmingEnabledKey = "skimmingEnabled"
     static let skimDwellMillisecondsKey = "skimDwellMilliseconds"
     static let skimDwellPlaysKey = "skimDwellPlays"
+    static let snapToTransitionsKey = "snapToTransitions"
     static let jumpSecondsKey = "jumpSeconds"
     static let defaultCutModeKey = "defaultCutMode"
     /// 默认输出目录；空字符串表示放在原文件旁边。
@@ -24,6 +25,7 @@ enum AppSettings {
             skimmingEnabledKey: PlaybackDefaults.skimmingEnabled,
             skimDwellMillisecondsKey: PlaybackDefaults.skimDwellMilliseconds,
             skimDwellPlaysKey: false,
+            snapToTransitionsKey: true,
             jumpSecondsKey: PlaybackDefaults.jumpSeconds,
             defaultCutModeKey: CutMode.fast.rawValue,
             outputDirectoryKey: "",
@@ -96,6 +98,12 @@ enum AppSettings {
         UserDefaults.standard.bool(forKey: skimDwellPlaysKey)
     }
 
+    /// 点击时间轴后，播放头吸附到附近的转场（黑屏、画面切换）。默认打开，N 键切换。
+    static var snapToTransitions: Bool {
+        get { UserDefaults.standard.bool(forKey: snapToTransitionsKey) }
+        set { UserDefaults.standard.set(newValue, forKey: snapToTransitionsKey) }
+    }
+
     /// 停留时间（秒）。
     static var skimDwell: Double {
         Double(max(50, UserDefaults.standard.integer(forKey: skimDwellMillisecondsKey))) / 1000
@@ -111,6 +119,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.skimmingEnabledKey) private var skimmingEnabled = PlaybackDefaults.skimmingEnabled
     @AppStorage(AppSettings.skimDwellMillisecondsKey) private var dwellMilliseconds = PlaybackDefaults.skimDwellMilliseconds
     @AppStorage(AppSettings.skimDwellPlaysKey) private var dwellPlays = false
+    @AppStorage(AppSettings.snapToTransitionsKey) private var snapToTransitions = true
     @AppStorage(AppSettings.jumpSecondsKey) private var jumpSeconds = PlaybackDefaults.jumpSeconds
     @AppStorage(AppSettings.defaultCutModeKey) private var defaultCutMode = CutMode.fast.rawValue
     @AppStorage(AppSettings.outputDirectoryKey) private var outputDirectory = ""
@@ -135,6 +144,7 @@ struct SettingsView: View {
                 .disabled(!skimmingEnabled || !dwellPlays)
             }
             Section("剪切") {
+                Toggle("点击时间轴时，黄线吸附到附近的转场（黑屏、画面切换）。快捷键 N", isOn: $snapToTransitions)
                 Picker("默认剪切模式", selection: $defaultCutMode) {
                     ForEach(CutMode.allCases, id: \.rawValue) { mode in
                         Text(mode.displayName).tag(mode.rawValue)

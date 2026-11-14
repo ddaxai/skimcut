@@ -53,6 +53,19 @@ if need bursts.mp4; then
     -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 128k -shortest "$OUT/bursts.mp4"
 fi
 
+# 4b. 几段不同视频拼在一起（找转场用）：640x360，25 fps，15.5 秒。
+#     0–6 秒 testsrc2 → 6.0–6.5 秒黑屏 → 6.5–11.5 秒 mandelbrot → 11.5 秒硬切 → smptebars 到 15.5 秒。
+if need joined.mp4; then
+  "${FF[@]}" -f lavfi -i "testsrc2=size=640x360:rate=25:duration=6" \
+    -f lavfi -i "color=c=black:size=640x360:rate=25:duration=0.5" \
+    -f lavfi -i "mandelbrot=size=640x360:rate=25" \
+    -f lavfi -i "smptebars=size=640x360:rate=25:duration=4" \
+    -f lavfi -i "sine=frequency=500:sample_rate=48000:duration=15.5" \
+    -filter_complex "[2]trim=duration=5,setpts=PTS-STARTPTS[m];[0][1][m][3]concat=n=4:v=1:a=0,format=yuv420p[v]" \
+    -map "[v]" -map 4:a -c:v libx264 -preset veryfast -g 50 -c:a aac -b:a 128k -shortest \
+    -movflags +faststart "$OUT/joined.mp4"
+fi
+
 # 5. MKV（H.264 + AAC，可以直接转封装成 MP4 预览）。
 if need sample.mkv; then
   "${FF[@]}" -f lavfi -i "testsrc2=size=640x360:rate=25:duration=8" \

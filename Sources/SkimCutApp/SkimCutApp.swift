@@ -47,6 +47,10 @@ struct SkimCutApp: App {
                 Button("起点设在这里　I") { model.player?.perform(.markIn) }
                 Button("终点设在这里　O") { model.player?.perform(.markOut) }
                 Button("清除选区") { model.player?.resetSelection() }
+                Divider()
+                Button("吸附转场（开 / 关）　N") { model.player?.perform(.toggleSnapping) }
+                Button("找出全部转场") { model.findAllTransitions() }
+                    .disabled(model.player == nil)
             }
             CommandGroup(after: .windowList) {
                 BatchWindowMenuItem(model: model)

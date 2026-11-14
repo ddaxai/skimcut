@@ -74,38 +74,77 @@ struct PlayerScreen: View {
 
 /// 暂停时显示在播放头（黄线）旁边的两个小按钮：把播放头的位置填进剪切的开始或结束。
 /// 放在时间轴上方的刻度那一条里，不挡缩略图；靠近右边缘时放到黄线左边。
+///
+/// 吸附到转场后，旁边多一行小字（“已吸附：黑屏 0.52 秒”），两个按钮自动取转场正确的那一边：
+/// “设为开始”取转场之后的第一帧，“设为结束”取转场之前（不含黑屏）。
 struct PlayheadActions: View {
     let player: PlayerController
     let model: AppModel
 
     /// 两个按钮大约的总宽度（用来决定放在黄线左边还是右边）。
-    private static let width: CGFloat = 132
+    private static let buttonsWidth: CGFloat = 132
 
     var body: some View {
         GeometryReader { geo in
             let x = CGFloat(player.timeline.x(for: player.playhead))
             if player.mode == .paused, x >= 0, x <= geo.size.width {
-                let onRight = x + 6 + Self.width <= geo.size.width
+                let status = statusText
+                // 中文小字大约 11 点一个字。
+                let width = Self.buttonsWidth + (status.map { CGFloat($0.count) * 11 + 18 } ?? 0)
+                let onRight = x + 6 + width <= geo.size.width
                 HStack(spacing: 4) {
                     Button("设为开始") {
                         player.markInAtPlayhead()
                         model.bottomPanel = .cut
                     }
-                    .help("把黄线的位置设为剪切的开始（键盘 I）")
+                    .help(startHelp)
                     Button("设为结束") {
                         player.markOutAtPlayhead()
                         model.bottomPanel = .cut
                     }
-                    .help("把黄线的位置设为剪切的结束（键盘 O）")
+                    .help(endHelp)
+                    if let status {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.black.opacity(0.65), in: Capsule())
+                    }
                 }
                 .controlSize(.mini)
                 .buttonStyle(.borderedProminent)
                 .fixedSize()
                 .position(
-                    x: onRight ? x + 6 + Self.width / 2 : x - 6 - Self.width / 2,
+                    x: onRight ? x + 6 + width / 2 : x - 6 - width / 2,
                     y: TimelineMetrics.rulerHeight / 2)
             }
         }
+    }
+
+    private var statusText: String? {
+        switch player.currentSnapStatus {
+        case .searching?: return "正在找转场…"
+        case .snapped(let t, _)?: return "已吸附：\(t.displayName)"
+        case .notFound?: return "附近没有转场"
+        case nil: return nil
+        }
+    }
+
+    private var startHelp: String {
+        if let t = player.snappedTransition {
+            return "设为转场之后的第一帧 \(Timecode.format(t.inPoint))（键盘 I）"
+        }
+        return "把黄线的位置设为剪切的开始（键盘 I）"
+    }
+
+    private var endHelp: String {
+        if let t = player.snappedTransition {
+            return t.kind == .black
+                ? "设为黑屏开始的地方 \(Timecode.format(t.outPoint))，剪出来的片段不带黑屏（键盘 O）"
+                : "设为画面切换的地方 \(Timecode.format(t.outPoint))（键盘 O）"
+        }
+        return "把黄线的位置设为剪切的结束（键盘 O）"
     }
 }
 
@@ -203,6 +242,14 @@ struct TransportBar: View {
                     .foregroundStyle(.secondary)
                     .help("AVPlayer 不能直接播放原文件，这里播放的是临时预览文件。导出时永远使用原文件，关闭视频时临时文件会被删除。")
             }
+
+            Toggle("吸附转场", isOn: Binding(
+                get: { player.snappingEnabled },
+                set: { if $0 != player.snappingEnabled { player.toggleSnapping() } }))
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .focusable(false)
+                .help("打开时，点击时间轴后黄线会吸附到附近的转场（黑屏、画面切换）。快捷键 N")
 
             HStack(spacing: 4) {
                 Button { player.zoom(by: 0.5) } label: { Image(systemName: "minus.magnifyingglass") }

@@ -23,6 +23,7 @@ swift run skimcut probe in.mkv      # stream info and the preview strategy
 swift run skimcut preview in.avi    # remux or proxy file the app would play
 swift run skimcut cut in.mp4 --start 1:23.456 --end 1:35.456 --mode precise
 swift run skimcut keyframes in.mp4 --around 83.456
+swift run skimcut transitions in.mp4 --around 83.4  # black / hard-cut transitions (omit --around for the whole file)
 swift run skimcut subs in.mp4 --add a.srt:chi:中文 --add b.ass:eng --format mkv
 scripts/make-test-media.sh          # generate test media into test-media/
 scripts/bundle-app.sh               # macOS only → build/SkimCut.app

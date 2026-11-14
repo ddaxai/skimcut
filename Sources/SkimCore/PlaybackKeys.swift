@@ -25,6 +25,8 @@ public enum PlaybackCommand: Sendable, Equatable {
     case markIn
     /// O：终点设在当前位置。
     case markOut
+    /// N：打开 / 关闭“吸附转场”。
+    case toggleSnapping
 }
 
 public struct KeyModifiers: OptionSet, Sendable, Hashable {
@@ -69,6 +71,7 @@ public enum PlaybackKeyMap {
         case "l": return .shuttleForward
         case "i": return .markIn
         case "o": return .markOut
+        case "n": return .toggleSnapping
         default: return nil
         }
     }
